@@ -1,0 +1,32 @@
+{
+  "patient_id": "PT001",
+  "sessions": [
+    {
+      "date": "2026-03-21T10:30:08.330291",
+      "session_id": "PT001_20260321_102958",
+      "mean_score": 23.0,
+      "dominant_performance": "poor",
+      "mean_rms": 0.0123,
+      "mean_rom": 35.28,
+      "mean_stability": 0.9188
+    },
+    {
+      "date": "2026-03-21T10:31:55.425265",
+      "session_id": "PT001_20260321_103151",
+      "mean_score": 55.0,
+      "dominant_performance": "compensating",
+      "mean_rms": 0.1213,
+      "mean_rom": 52.69,
+      "mean_stability": 0.7895
+    },
+    {
+      "date": "2026-03-21T10:32:17.753002",
+      "session_id": "PT001_20260321_103211",
+      "mean_score": 26.0,
+      "dominant_performance": "poor",
+      "mean_rms": 0.0519,
+      "mean_rom": 44.83,
+      "mean_stability": 0.8333
+    }
+  ]
+}

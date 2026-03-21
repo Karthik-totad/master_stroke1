@@ -1,0 +1,25 @@
+{
+  "session_id": "PT001_20260321_102958",
+  "patient_id": "PT001",
+  "start_time": "2026-03-21T10:29:58.272538",
+  "duration_seconds": 10.1,
+  "total_windows": 1,
+  "emg": {
+    "mean_rms": 0.0123,
+    "max_rms": 0.0123,
+    "mean_contraction_ratio": 0.0
+  },
+  "motion": {
+    "mean_rom": 35.28,
+    "max_rom": 35.28,
+    "mean_stability": 0.9188
+  },
+  "game": {
+    "mean_score": 23.0,
+    "dominant_performance": "poor",
+    "label_distribution": {
+      "poor": 1
+    }
+  },
+  "csv_path": "/home/claude/stroke_rehab/data/sessions/PT001_20260321_102958_features.csv"
+}

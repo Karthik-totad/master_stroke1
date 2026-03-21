@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeuroRehab — Smart Stroke Rehabilitation</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #060c1a;
+    --surface:   #0c1428;
+    --surface2:  #111c36;
+    --border:    #1a2650;
+    --accent:    #00c8aa;
+    --accent2:   #7c4dff;
+    --good:      #22dd7a;
+    --warn:      #ffaa22;
+    --danger:    #ff3d5a;
+    --text:      #dce8ff;
+    --muted:     #556090;
+    --mono:      'JetBrains Mono', monospace;
+    --sans:      'Space Grotesk', sans-serif;
+  }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 32px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .logo-icon {
+    width: 34px; height: 34px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem;
+  }
+  .header-status {
+    display: flex; align-items: center; gap: 18px;
+  }
+  .live-badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--good);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--good);
+    letter-spacing: 0.06em;
+  }
+  .live-dot {
+    width: 7px; height: 7px;
+    background: var(--good);
+    border-radius: 50%;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+  .patient-pill {
+    padding: 5px 14px;
+    border-radius: 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .patient-pill span { color: var(--text); font-weight: 600; }
+
+  /* ── Layout ── */
+  .main { padding: 24px 32px; display: grid; gap: 20px; }
+
+  /* ── Metric row ── */
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+  }
+  .metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .metric-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px; height: 100%;
+    background: var(--accent);
+    border-radius: 3px 0 0 3px;
+  }
+  .metric-card.warn::before { background: var(--warn); }
+  .metric-card.danger::before { background: var(--danger); }
+  .metric-card.good::before { background: var(--good); }
+  .metric-card.purple::before { background: var(--accent2); }
+
+  .metric-value {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    transition: color 0.4s;
+  }
+  .metric-value.warn  { color: var(--warn); }
+  .metric-value.good  { color: var(--good); }
+  .metric-value.danger { color: var(--danger); }
+  .metric-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .metric-sub {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ── Two-column content ── */
+  .content-grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 20px;
+  }
+  .left-col { display: flex; flex-direction: column; gap: 18px; }
+  .right-col { display: flex; flex-direction: column; gap: 18px; }
+
+  /* ── Panels ── */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .panel-body { padding: 16px 20px; }
+
+  /* ── EMG chart ── */
+  .emg-container { position: relative; height: 180px; }
+
+  /* ── Feature bars ── */
+  .feature-bars { display: grid; gap: 8px; }
+  .feat-row {
+    display: grid;
+    grid-template-columns: 120px 1fr 70px;
+    align-items: center;
+    gap: 10px;
+  }
+  .feat-name {
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-align: right;
+  }
+  .feat-track {
+    height: 6px;
+    background: var(--surface2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .feat-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    transition: width 0.4s ease;
+  }
+  .feat-val {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--accent);
+    text-align: right;
+  }
+
+  /* ── Performance badge ── */
+  .perf-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 16px;
+    border-radius: 24px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    transition: all 0.4s;
+  }
+  .perf-badge.good    { background: rgba(34,221,122,0.12); color: var(--good);   border: 1px solid var(--good); }
+  .perf-badge.comp    { background: rgba(255,170,34,0.12); color: var(--warn);   border: 1px solid var(--warn); }
+  .perf-badge.poor    { background: rgba(255,61,90,0.12);  color: var(--danger); border: 1px solid var(--danger); }
+  .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+  /* ── Prob bars ── */
+  .prob-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+  }
+  .prob-label { width: 100px; font-size: 0.78rem; color: var(--muted); }
+  .prob-track { flex: 1; height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .prob-fill  { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+  .prob-pct   { width: 38px; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); text-align: right; }
+
+  /* ── Stability gauge ── */
+  .stability-gauge {
+    position: relative;
+    width: 160px;
+    height: 100px;
+    margin: 0 auto;
+  }
+  .gauge-svg { width: 100%; height: 100%; }
+
+  /* ── Progress chart ── */
+  .progress-container { height: 200px; }
+
+  /* ── Therapy plan ── */
+  .exercise-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    background: var(--surface2);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--border);
+    transition: border-color 0.3s;
+  }
+  .exercise-card.active { border-left-color: var(--accent); }
+  .ex-icon { font-size: 1.6rem; flex-shrink: 0; }
+  .ex-info { flex: 1; }
+  .ex-name { font-size: 0.9rem; font-weight: 600; color: var(--text); }
+  .ex-detail { font-size: 0.74rem; color: var(--muted); margin-top: 2px; }
+  .diff-pill {
+    padding: 3px 9px;
+    border-radius: 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .diff-easy   { background: rgba(34,221,122,0.12); color: var(--good);   border: 1px solid rgba(34,221,122,0.3); }
+  .diff-medium { background: rgba(255,170,34,0.12);  color: var(--warn);   border: 1px solid rgba(255,170,34,0.3); }
+  .diff-hard   { background: rgba(255,61,90,0.12);   color: var(--danger); border: 1px solid rgba(255,61,90,0.3); }
+
+  /* ── ROM arc ── */
+  .rom-arc-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+
+  /* ── Session controls ── */
+  .controls { display: flex; gap: 10px; align-items: center; }
+  .btn {
+    padding: 9px 22px;
+    border-radius: 8px;
+    border: none;
+    font-family: var(--sans);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.03em;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  .btn-primary:hover { background: #00e8c5; transform: translateY(-1px); }
+  .btn-secondary {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Mini game cards ── */
+  .games-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .game-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.25s;
+  }
+  .game-card:hover, .game-card.active-game {
+    border-color: var(--accent);
+    background: rgba(0,200,170,0.05);
+    transform: translateY(-2px);
+  }
+  .game-card.active-game { box-shadow: 0 0 20px rgba(0,200,170,0.15); }
+  .game-emoji { font-size: 2rem; margin-bottom: 8px; display: block; }
+  .game-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; }
+  .game-exercise { font-size: 0.7rem; color: var(--accent); margin-bottom: 6px; }
+  .game-desc { font-size: 0.7rem; color: var(--muted); line-height: 1.4; }
+
+  /* ── Session log ── */
+  .log-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.76rem;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { font-family: var(--mono); color: var(--muted); width: 40px; }
+  .log-label { flex: 1; }
+  .log-score { font-family: var(--mono); color: var(--accent); }
+
+  /* ── Scrollable log ── */
+  .log-scroll { max-height: 160px; overflow-y: auto; }
+  .log-scroll::-webkit-scrollbar { width: 4px; }
+  .log-scroll::-webkit-scrollbar-track { background: var(--surface2); }
+  .log-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* ── Section label ── */
+  .section-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--border);
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 20px;
+    color: var(--muted);
+    font-size: 0.72rem;
+    border-top: 1px solid var(--border);
+    margin-top: 10px;
+  }
+  footer code {
+    font-family: var(--mono);
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🧠</div>
+    NeuroRehab
+  </div>
+  <div class="header-status">
+    <div class="live-badge"><div class="live-dot"></div>LIVE SIMULATION</div>
+    <div class="patient-pill">Patient: <span id="patientId">PT001</span></div>
+    <div class="patient-pill">Session: <span id="sessionTime">00:00</span></div>
+  </div>
+</header>
+
+<!-- ── Main ── -->
+<div class="main">
+
+  <!-- Metric row -->
+  <div class="metrics-row">
+    <div class="metric-card" id="card-score">
+      <div class="metric-value" id="m-score">--</div>
+      <div class="metric-label">Performance Score</div>
+      <div class="metric-sub" id="m-score-sub">awaiting data</div>
+    </div>
+    <div class="metric-card" id="card-rms">
+      <div class="metric-value" id="m-rms">--</div>
+      <div class="metric-label">EMG RMS</div>
+      <div class="metric-sub">muscle activation</div>
+    </div>
+    <div class="metric-card purple" id="card-rom">
+      <div class="metric-value" id="m-rom" style="color:var(--accent2)">--°</div>
+      <div class="metric-label">Range of Motion</div>
+      <div class="metric-sub" id="m-rom-sub">target: 45°</div>
+    </div>
+    <div class="metric-card" id="card-stab">
+      <div class="metric-value" id="m-stab">--</div>
+      <div class="metric-label">Stability Index</div>
+      <div class="metric-sub">tremor detection</div>
+    </div>
+    <div class="metric-card" id="card-label">
+      <div id="m-badge" style="margin-top:4px">
+        <span class="perf-badge comp"><span class="badge-dot"></span>COMPENSATING</span>
+      </div>
+      <div class="metric-label" style="margin-top:10px">Performance Label</div>
+      <div class="metric-sub" id="m-conf">confidence: --</div>
+    </div>
+  </div>
+
+  <!-- Content grid -->
+  <div class="content-grid">
+
+    <!-- LEFT -->
+    <div class="left-col">
+
+      <!-- EMG chart -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Live EMG Signal</span>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span style="font-size:0.72rem;color:var(--muted)">Pattern:</span>
+            <select id="patternSel" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:3px 8px;border-radius:6px;font-family:var(--sans);font-size:0.75rem;cursor:pointer">
+              <option value="poor">Poor</option>
+              <option value="moderate" selected>Moderate</option>
+              <option value="good">Good</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel-body" style="padding-bottom:10px">
+          <div class="emg-container">
+            <canvas id="emgChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- EMG Features -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">EMG Feature Extraction</span>
+          <span style="font-size:0.7rem;color:var(--muted)">per 256-sample window</span>
+        </div>
+        <div class="panel-body">
+          <div class="feature-bars" id="featureBars"></div>
+        </div>
+      </div>
+
+      <!-- Progress chart -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Recovery Progress (20 Sessions)</span>
+          <span style="font-size:0.7rem;color:var(--good)">↑ Improving</span>
+        </div>
+        <div class="panel-body">
+          <div class="progress-container">
+            <canvas id="progressChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT -->
+    <div class="right-col">
+
+      <!-- Performance -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">ML Classification</span>
+        </div>
+        <div class="panel-body">
+          <div style="margin-bottom:14px" id="probBars">
+            <div class="prob-row">
+              <div class="prob-label" style="color:var(--danger)">■ Poor</div>
+              <div class="prob-track"><div class="prob-fill" id="prob-poor" style="background:var(--danger);width:10%"></div></div>
+              <div class="prob-pct" id="pct-poor">10%</div>
+            </div>
+            <div class="prob-row">
+              <div class="prob-label" style="color:var(--warn)">■ Compensating</div>
+              <div class="prob-track"><div class="prob-fill" id="prob-comp" style="background:var(--warn);width:60%"></div></div>
+              <div class="prob-pct" id="pct-comp">60%</div>
+            </div>
+            <div class="prob-row">
+              <div class="prob-label" style="color:var(--good)">■ Good</div>
+              <div class="prob-track"><div class="prob-fill" id="prob-good" style="background:var(--good);width:30%"></div></div>
+              <div class="prob-pct" id="pct-good">30%</div>
+            </div>
+          </div>
+
+          <!-- Stability gauge -->
+          <div class="rom-arc-wrap" style="margin:10px 0">
+            <svg class="gauge-svg" viewBox="0 0 200 110" style="width:180px;height:100px">
+              <defs>
+                <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="#ff3d5a"/>
+                  <stop offset="50%" stop-color="#ffaa22"/>
+                  <stop offset="100%" stop-color="#22dd7a"/>
+                </linearGradient>
+              </defs>
+              <!-- Track -->
+              <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1a2650" stroke-width="12" stroke-linecap="round"/>
+              <!-- Fill -->
+              <path id="gaugeFill" d="M 20 100 A 80 80 0 0 1 180 100" fill="none"
+                    stroke="url(#gaugeGrad)" stroke-width="12" stroke-linecap="round"
+                    stroke-dasharray="251.2" stroke-dashoffset="125.6"/>
+              <!-- Needle -->
+              <line id="gaugeNeedle" x1="100" y1="100" x2="100" y2="30"
+                    stroke="white" stroke-width="2" stroke-linecap="round"
+                    transform="rotate(-90 100 100)"/>
+              <circle cx="100" cy="100" r="5" fill="white"/>
+              <text x="100" y="88" text-anchor="middle" fill="#556090" font-size="9" font-family="Space Grotesk">STABILITY</text>
+              <text id="gaugeVal" x="100" y="106" text-anchor="middle" fill="#00c8aa" font-size="14" font-family="JetBrains Mono" font-weight="700">0.85</text>
+            </svg>
+          </div>
+
+          <!-- ROM bar -->
+          <div style="margin-top:8px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:0.72rem;color:var(--muted)">RANGE OF MOTION</span>
+              <span style="font-family:var(--mono);font-size:0.78rem;color:var(--accent2)" id="romPct">0%</span>
+            </div>
+            <div style="background:var(--surface2);border-radius:4px;height:8px;overflow:hidden">
+              <div id="romBar" style="height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));width:0%;transition:width 0.5s ease"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:3px">
+              <span style="font-size:0.65rem;color:var(--muted)">0°</span>
+              <span style="font-size:0.65rem;color:var(--warn)">target 45°</span>
+              <span style="font-size:0.65rem;color:var(--muted)">90°</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Therapy Plan -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Therapy Plan — PT001</span>
+          <span style="font-size:0.7rem;color:var(--muted)">moderate severity</span>
+        </div>
+        <div class="panel-body" style="padding-top:10px">
+          <div id="exerciseList"></div>
+        </div>
+      </div>
+
+      <!-- Session log -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Session Log</span>
+          <div class="controls">
+            <button class="btn btn-secondary" id="btnClear" onclick="clearLog()">Clear</button>
+            <button class="btn btn-primary" id="btnSession" onclick="toggleSession()">▶ Start</button>
+          </div>
+        </div>
+        <div class="panel-body" style="padding:12px 16px">
+          <div class="log-scroll" id="logScroll">
+            <div style="color:var(--muted);font-size:0.78rem;text-align:center;padding:20px 0">
+              Start a session to record data
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Games row -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Gamified Therapy — Mini Games</span>
+      <span style="font-size:0.7rem;color:var(--muted)">Adaptive difficulty • Doctor-prescribed sequence</span>
+    </div>
+    <div class="panel-body">
+      <div class="games-row" id="gamesRow"></div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  NeuroRehab v1.0 &nbsp;|&nbsp;
+  <code>python scripts/run_demo.py</code> &nbsp;|&nbsp;
+  <code>streamlit run ui/dashboard.py</code> &nbsp;|&nbsp;
+  EMG → OpenCV → ML → Game pipeline
+</footer>
+
+<script>
+// ── Simulation Engine ──────────────────────────────────────────
+const GAMES = [
+  { name: "Bubble Pop",     emoji: "🫧", exercise: "Pinch coordination",
+    desc: "Pinch floating bubbles before they escape. Easy for any age." },
+  { name: "Flower Bloom",   emoji: "🌸", exercise: "Hand open / close",
+    desc: "Garden blooms when you open your hand. Calm, gentle encouragement." },
+  { name: "Pump the Pump",  emoji: "💦", exercise: "Grip strength",
+    desc: "Squeeze to charge, release to fire water cannon at targets." },
+  { name: "Maze Steering",  emoji: "🌀", exercise: "Wrist rotation",
+    desc: "Rotate wrist like a joystick to guide marble through paths." },
+];
+
+const FEATURES = [
+  { name: "RMS",             key: "rms",    max: 0.5  },
+  { name: "MAV",             key: "mav",    max: 0.45 },
+  { name: "Zero Crossings",  key: "zc",     max: 50   },
+  { name: "Waveform Length", key: "wl",     max: 4.0  },
+  { name: "Variance",        key: "var",    max: 0.05 },
+  { name: "Mean Frequency",  key: "mf",     max: 250  },
+  { name: "Contraction Ratio", key: "cr",   max: 1.0  },
+];
+
+let emgBuffer = new Array(200).fill(0);
+let sessionActive = false;
+let sessionStart = null;
+let sessionLog = [];
+let frame = 0;
+let activeGame = 0;
+let pattern = "moderate";
+
+// Simulated EMG generator
+function generateEMG(t, pat) {
+  const noise = (Math.random() - 0.5) * 0.04;
+  let burst = 0;
+  const amps = { poor: 0.18, moderate: 0.50, good: 0.82 };
+  const amp = amps[pat] || 0.5;
+  // Contraction bursts
+  if (Math.sin(t * 2.1) > 0.3) {
+    burst = amp * Math.abs(
+      Math.random() * 0.5
+      + Math.sin(t * 120 * 2 * Math.PI) * 0.3
+      + Math.sin(t * 240 * 2 * Math.PI) * 0.1
+    );
+  }
+  return Math.max(0, Math.min(1, burst + Math.abs(noise)));
+}
+
+// Simulated features
+function computeFeatures(t, pat) {
+  const mults = { poor: 0.25, moderate: 0.55, good: 0.85 };
+  const m = mults[pat] || 0.55;
+  const jitter = () => (Math.random() - 0.5) * 0.1;
+  return {
+    rms: Math.max(0, m * 0.45 + jitter()),
+    mav: Math.max(0, m * 0.40 + jitter()),
+    zc:  Math.max(0, m * 30 + Math.random() * 8),
+    wl:  Math.max(0, m * 2.5 + jitter() * 2),
+    var: Math.max(0, m * 0.025 + jitter() * 0.01),
+    mf:  Math.max(0, m * 160 + Math.random() * 30),
+    cr:  Math.max(0, Math.min(1, m * 0.65 + jitter())),
+  };
+}
+
+// Simulated ML output
+function classify(feat, pat) {
+  const score_raw = feat.rms * 30 + feat.cr * 35 + (pat === "good" ? 20 : pat === "moderate" ? 8 : 0);
+  const score = Math.max(0, Math.min(100, Math.round(score_raw * 100 + Math.random() * 12 - 6)));
+  let label, pGood, pComp, pPoor;
+  if (score >= 65)      { label = "good";          pGood = 0.7 + Math.random()*0.2; pComp = 1 - pGood - 0.05; pPoor = 0.05; }
+  else if (score >= 38) { label = "compensating";  pComp = 0.6 + Math.random()*0.2; pGood = (1-pComp)*0.4;   pPoor = 1-pComp-pGood; }
+  else                  { label = "poor";           pPoor = 0.6 + Math.random()*0.2; pComp = (1-pPoor)*0.5;   pGood = 1-pPoor-pComp; }
+  return { label, score, pGood, pComp, pPoor, conf: Math.max(pGood, pComp, pPoor) };
+}
+
+// Motion simulation
+function motionSim(t) {
+  return {
+    rom: 45 + 12 * Math.sin(t * 0.4),
+    stability: 0.82 + 0.12 * Math.sin(t * 1.8),
+  };
+}
+
+// ── Chart setup ──────────────────────────────────────────────
+const emgCtx = document.getElementById("emgChart").getContext("2d");
+const emgChart = new Chart(emgCtx, {
+  type: "line",
+  data: {
+    labels: new Array(200).fill(""),
+    datasets: [{
+      data: emgBuffer,
+      borderColor: "#00c8aa",
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: true,
+      backgroundColor: "rgba(0,200,170,0.06)",
+      tension: 0.3,
+    }],
+  },
+  options: {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        min: 0, max: 1,
+        ticks: { color: "#556090", font: { size: 10 } },
+        grid: { color: "rgba(26,38,80,0.8)" },
+      },
+    },
+  },
+});
+
+// Threshold annotation (manual line via dataset)
+emgChart.data.datasets.push({
+  data: new Array(200).fill(0.05),
+  borderColor: "rgba(255,170,34,0.4)",
+  borderWidth: 1,
+  borderDash: [4, 4],
+  pointRadius: 0,
+  fill: false,
+});
+
+const progCtx = document.getElementById("progressChart").getContext("2d");
+// Generate demo progress data
+const progN = 20;
+const progScores = Array.from({ length: progN }, (_, i) => Math.max(10, Math.min(95, 32 + i * 2.8 + (Math.random() - 0.5) * 12)));
+const progROMs   = Array.from({ length: progN }, (_, i) => Math.max(5, Math.min(75, 14 + i * 2.0 + (Math.random() - 0.5) * 7)));
+const progLabels = Array.from({ length: progN }, (_, i) => `Day ${i+1}`);
+
+const progressChart = new Chart(progCtx, {
+  type: "line",
+  data: {
+    labels: progLabels,
+    datasets: [
+      {
+        label: "Score",
+        data: progScores,
+        borderColor: "#00c8aa",
+        backgroundColor: "rgba(0,200,170,0.06)",
+        borderWidth: 2,
+        pointRadius: 3,
+        pointBackgroundColor: "#00c8aa",
+        fill: true,
+        tension: 0.35,
+        yAxisID: "y",
+      },
+      {
+        label: "ROM (°)",
+        data: progROMs,
+        borderColor: "#7c4dff",
+        backgroundColor: "rgba(124,77,255,0.04)",
+        borderWidth: 2,
+        pointRadius: 3,
+        pointBackgroundColor: "#7c4dff",
+        fill: true,
+        tension: 0.35,
+        yAxisID: "y2",
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 0 },
+    plugins: {
+      legend: {
+        labels: { color: "#556090", font: { size: 10, family: "Space Grotesk" }, boxWidth: 10 },
+      },
+    },
+    scales: {
+      x: { ticks: { color: "#3a4870", font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: "rgba(26,38,80,0.6)" } },
+      y:  { position: "left",  ticks: { color: "#00c8aa", font: { size: 9 } }, grid: { color: "rgba(26,38,80,0.4)" }, min: 0, max: 105 },
+      y2: { position: "right", ticks: { color: "#7c4dff", font: { size: 9 } }, grid: { display: false }, min: 0, max: 90 },
+    },
+  },
+});
+
+// ── Build static UI ──────────────────────────────────────────
+function buildFeatureBars() {
+  const el = document.getElementById("featureBars");
+  el.innerHTML = FEATURES.map((f, i) => `
+    <div class="feat-row">
+      <div class="feat-name">${f.name}</div>
+      <div class="feat-track"><div class="feat-fill" id="fb${i}" style="width:0%"></div></div>
+      <div class="feat-val" id="fv${i}">0.000</div>
+    </div>`).join("");
+}
+
+function buildGames() {
+  const el = document.getElementById("gamesRow");
+  el.innerHTML = GAMES.map((g, i) => `
+    <div class="game-card ${i === activeGame ? "active-game" : ""}" onclick="selectGame(${i})">
+      <span class="game-emoji">${g.emoji}</span>
+      <div class="game-title">${g.name}</div>
+      <div class="game-exercise">${g.exercise}</div>
+      <div class="game-desc">${g.desc}</div>
+    </div>`).join("");
+}
+
+function buildExercises() {
+  const plan = [
+    { game: "flower_bloom",  icon: "🌸", name: "Flower Bloom",   type: "Finger extension",   sets: 2, reps: 15, diff: "easy"   },
+    { game: "bubble_pop",    icon: "🫧", name: "Bubble Pop",     type: "Pinch coordination", sets: 3, reps: 20, diff: "easy"   },
+    { game: "pump_the_pump", icon: "💦", name: "Pump the Pump",  type: "Grip strength",      sets: 3, reps: 10, diff: "easy"   },
+    { game: "maze_steering", icon: "🌀", name: "Maze Steering",  type: "Wrist rotation",     sets: 2, reps: 10, diff: "medium" },
+  ];
+  document.getElementById("exerciseList").innerHTML = plan.map((ex, i) => `
+    <div class="exercise-card ${i === 0 ? "active" : ""}">
+      <div class="ex-icon">${ex.icon}</div>
+      <div class="ex-info">
+        <div class="ex-name">${ex.name}</div>
+        <div class="ex-detail">${ex.sets} sets × ${ex.reps} reps &nbsp;·&nbsp; ${ex.type}</div>
+      </div>
+      <span class="diff-pill diff-${ex.diff}">${ex.diff.toUpperCase()}</span>
+    </div>`).join("");
+}
+
+function selectGame(i) {
+  activeGame = i;
+  buildGames();
+}
+
+// ── Gauge helpers ──────────────────────────────────────────
+function setGauge(val) {
+  // val 0..1 → stroke-dashoffset
+  const circumference = 251.2;
+  const offset = circumference - val * circumference;
+  const needle = document.getElementById("gaugeNeedle");
+  const fill = document.getElementById("gaugeFill");
+  const gv = document.getElementById("gaugeVal");
+  fill.setAttribute("stroke-dashoffset", offset);
+  const angle = val * 180 - 90;
+  needle.setAttribute("transform", `rotate(${angle} 100 100)`);
+  gv.textContent = val.toFixed(3);
+}
+
+// ── Update loop ──────────────────────────────────────────────
+function update() {
+  const t = Date.now() / 1000;
+  frame++;
+  pattern = document.getElementById("patternSel").value;
+
+  // EMG signal
+  const emgVal = generateEMG(t, pattern);
+  emgBuffer.push(emgVal);
+  if (emgBuffer.length > 200) emgBuffer.shift();
+  emgChart.data.datasets[0].data = [...emgBuffer];
+  emgChart.data.datasets[1].data = new Array(emgBuffer.length).fill(0.05);
+  emgChart.update("none");
+
+  // Features (update every 8 frames)
+  if (frame % 8 === 0) {
+    const feat = computeFeatures(t, pattern);
+    FEATURES.forEach((f, i) => {
+      const pct = Math.min(100, (feat[f.key] / f.max) * 100);
+      document.getElementById(`fb${i}`).style.width = pct + "%";
+      const v = feat[f.key];
+      document.getElementById(`fv${i}`).textContent = v < 10 ? v.toFixed(4) : Math.round(v).toString();
+    });
+
+    // ML classify
+    const pred = classify(feat, pattern);
+    const motion = motionSim(t);
+
+    // Metrics
+    document.getElementById("m-score").textContent = pred.score;
+    document.getElementById("m-score").className = "metric-value " +
+      (pred.score >= 65 ? "good" : pred.score >= 38 ? "warn" : "danger");
+    document.getElementById("m-rms").textContent = feat.rms.toFixed(4);
+    document.getElementById("m-rom").textContent = motion.rom.toFixed(1) + "°";
+    document.getElementById("m-stab").textContent = motion.stability.toFixed(3);
+    document.getElementById("m-conf").textContent = "confidence: " + (pred.conf * 100).toFixed(0) + "%";
+
+    // Badge
+    const badgeMap = {
+      good:         ["good",   "🟢 GOOD"],
+      compensating: ["comp",   "🟡 COMPENSATING"],
+      poor:         ["poor",   "🔴 POOR"],
+    };
+    const [cls, txt] = badgeMap[pred.label] || badgeMap.compensating;
+    document.getElementById("m-badge").innerHTML =
+      `<span class="perf-badge ${cls}"><span class="badge-dot"></span>${txt}</span>`;
+
+    // Probs
+    document.getElementById("prob-poor").style.width = (pred.pPoor * 100) + "%";
+    document.getElementById("prob-comp").style.width = (pred.pComp * 100) + "%";
+    document.getElementById("prob-good").style.width = (pred.pGood * 100) + "%";
+    document.getElementById("pct-poor").textContent = (pred.pPoor * 100).toFixed(0) + "%";
+    document.getElementById("pct-comp").textContent = (pred.pComp * 100).toFixed(0) + "%";
+    document.getElementById("pct-good").textContent = (pred.pGood * 100).toFixed(0) + "%";
+
+    // Stability gauge
+    setGauge(motion.stability);
+
+    // ROM bar
+    const romPct = Math.min(100, (motion.rom / 90) * 100);
+    document.getElementById("romBar").style.width = romPct + "%";
+    document.getElementById("romPct").textContent = romPct.toFixed(0) + "%";
+
+    // Session log
+    if (sessionActive) {
+      const elapsed = ((Date.now() - sessionStart) / 1000).toFixed(1);
+      sessionLog.push({ time: elapsed, label: pred.label, score: pred.score });
+      if (sessionLog.length > 50) sessionLog.shift();
+      renderLog();
+    }
+
+    // Difficulty adaptation in plan
+    const diffMap = { good: "hard", compensating: "medium", poor: "easy" };
+    const diff = diffMap[pred.label] || "easy";
+    document.querySelectorAll(".diff-pill").forEach(el => {
+      const d = el.textContent.toLowerCase();
+      // Update first exercise to reflect current performance
+    });
+  }
+
+  // Session timer
+  if (sessionActive && sessionStart) {
+    const elapsed = Date.now() - sessionStart;
+    const mm = Math.floor(elapsed / 60000);
+    const ss = Math.floor((elapsed % 60000) / 1000);
+    document.getElementById("sessionTime").textContent =
+      String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0");
+  }
+
+  requestAnimationFrame(update);
+}
+
+function renderLog() {
+  const el = document.getElementById("logScroll");
+  const colorMap = { good: "var(--good)", compensating: "var(--warn)", poor: "var(--danger)" };
+  const recent = sessionLog.slice(-20).reverse();
+  el.innerHTML = recent.map(e => `
+    <div class="log-entry">
+      <div class="log-time">${e.time}s</div>
+      <div class="log-label" style="color:${colorMap[e.label] || "var(--text)"}">● ${e.label}</div>
+      <div class="log-score">${e.score}</div>
+    </div>`).join("");
+}
+
+function toggleSession() {
+  sessionActive = !sessionActive;
+  const btn = document.getElementById("btnSession");
+  if (sessionActive) {
+    sessionStart = Date.now();
+    sessionLog = [];
+    btn.textContent = "⏹ Stop";
+    btn.style.background = "var(--danger)";
+  } else {
+    btn.textContent = "▶ Start";
+    btn.style.background = "";
+    document.getElementById("sessionTime").textContent = "00:00";
+  }
+}
+
+function clearLog() {
+  sessionLog = [];
+  document.getElementById("logScroll").innerHTML =
+    '<div style="color:var(--muted);font-size:0.78rem;text-align:center;padding:20px 0">Log cleared</div>';
+}
+
+// ── Init ──────────────────────────────────────────────────────
+buildFeatureBars();
+buildGames();
+buildExercises();
+update();
+</script>
+</body>
+</html>

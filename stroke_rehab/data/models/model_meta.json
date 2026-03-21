@@ -1,0 +1,28 @@
+{
+  "trained_at": "2026-03-21T10:28:20.730149",
+  "n_samples": 3000,
+  "accuracy": 0.9983333333333333,
+  "cv_accuracy": 0.9966666666666667,
+  "cv_std": 0.001054092553389449,
+  "feature_names": [
+    "rms",
+    "mav",
+    "zero_crossings",
+    "slope_sign_changes",
+    "waveform_length",
+    "variance",
+    "mean_freq",
+    "median_freq",
+    "peak_amplitude",
+    "contraction_ratio",
+    "arm_angle",
+    "rom",
+    "stability",
+    "velocity"
+  ],
+  "classes": [
+    "compensating",
+    "good",
+    "poor"
+  ]
+}

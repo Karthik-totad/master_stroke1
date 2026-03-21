@@ -1,0 +1,2 @@
+timestamp,patient_id,session_id,rms,mav,zero_crossings,slope_sign_changes,waveform_length,variance,mean_freq,median_freq,peak_amplitude,contraction_ratio,arm_angle,rom,stability,velocity,game_name,score,difficulty,performance_label
+1.007,PT001,PT001_20260321_103151,0.12135,0.068044,96.0,115.0,22.398582,0.014726,225.76019,234.375,0.610289,0.332031,60.51,52.69,0.7895,0.9162,bubble_pop,55.0,easy,compensating

@@ -1,0 +1,48 @@
+{
+  "patient_id": "PT001",
+  "date": "2026-03-21",
+  "condition": "right_hemiplegia",
+  "affected_side": "right",
+  "severity": "moderate",
+  "prescribed_exercises": [
+    {
+      "type": "finger_extension",
+      "game": "flower_bloom",
+      "sets": 2,
+      "reps": 15,
+      "difficulty": "easy",
+      "notes": "Start with this calming exercise to warm up. Focus on full finger extension."
+    },
+    {
+      "type": "pinch_coordination",
+      "game": "bubble_pop",
+      "sets": 3,
+      "reps": 20,
+      "difficulty": "easy",
+      "notes": "Pinch coordination. Watch for compensatory shoulder elevation."
+    },
+    {
+      "type": "grip_strength",
+      "game": "pump_the_pump",
+      "sets": 3,
+      "reps": 10,
+      "difficulty": "easy",
+      "notes": "Grip strengthening. Avoid overextension. Rest 30s between sets."
+    },
+    {
+      "type": "wrist_rotation",
+      "game": "maze_steering",
+      "sets": 2,
+      "reps": 10,
+      "difficulty": "easy",
+      "notes": "Gentle wrist rotation only. Stop if patient reports pain."
+    }
+  ],
+  "contraindications": [
+    "avoid_high_resistance",
+    "no_forceful_extension"
+  ],
+  "target_rom_degrees": 45,
+  "session_duration_minutes": 20,
+  "notes": "Patient has moderate spasticity in right hand. All exercises start at easy level. Increase difficulty only when patient achieves >75% score consistently over 3 sessions. Patient is motivated and responds well to visual feedback."
+}
