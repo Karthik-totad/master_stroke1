@@ -450,6 +450,15 @@
       "mean_rms": 0.0596,
       "mean_rom": 44.99,
       "mean_stability": 0.845
+    },
+    {
+      "date": "2026-03-23T16:09:09.605842",
+      "session_id": "PT001_20260323_160806",
+      "mean_score": 96.93,
+      "dominant_performance": "good",
+      "mean_rms": 0.0593,
+      "mean_rom": 44.89,
+      "mean_stability": 0.8512
     }
   ]
 }

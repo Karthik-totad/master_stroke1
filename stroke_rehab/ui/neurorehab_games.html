@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -106,6 +107,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
       <option value="57600">57600</option>
       <option value="921600">921600</option>
     </select>
+    <button class="hw-btn" id="btnMQTT">
+      <div class="dot"></div>
+      <span>MQTT Offline</span>
+    </button>
   </div>
   <div class="hud">
     <div class="hs"><div class="hv" id="hScore">0</div><div class="hl">Score</div></div>
@@ -216,7 +221,112 @@ const HW = {
   stability:1.0, wHist:[],
 };
 
-// ─── Serial / ESP32 ────────────────────────────
+// ─── MQTT Fusion State (from Python pipeline) ──────────────────
+const MQ = {
+  client:     null,
+  connected:  false,
+  // Latest fusion state from rehab/PT001/fusion
+  state:      'REST',          // GOOD | INTENT_BLOCKED | PASSIVE_MOVE | REST
+  effortPct:  0,
+  repCompleted: false,
+  // Latest EMG from rehab/PT001/emg
+  fatigueAlert: false,
+  contracting:  false,
+  // Feedback throttle — don't spam toasts
+  lastFbTime:   0,
+  lastState:    'REST',
+  // Score multiplier active when GOOD streak >= 2
+  goodStreak:   0,
+  bonusActive:  false,
+};
+
+function connectMQTT() {
+  if (MQ.client) return;   // already connected
+  const broker = 'ws://localhost:9001';
+  const clientId = 'neurorehab_game_' + Math.random().toString(16).slice(2, 8);
+  try {
+    MQ.client = mqtt.connect(broker, { clientId, keepalive: 30, reconnectPeriod: 2000 });
+
+    MQ.client.on('connect', () => {
+      MQ.connected = true;
+      MQ.client.subscribe('rehab/PT001/fusion');
+      MQ.client.subscribe('rehab/PT001/emg');
+      MQ.client.subscribe('rehab/PT001/game');
+      updateMQTTBadge(true);
+      console.log('[MQTT] Connected and subscribed');
+    });
+
+    MQ.client.on('disconnect', () => { MQ.connected = false; updateMQTTBadge(false); });
+    MQ.client.on('error',      () => { MQ.connected = false; updateMQTTBadge(false); });
+
+    MQ.client.on('message', (topic, payload) => {
+      try {
+        const msg = JSON.parse(payload.toString());
+        if (topic.endsWith('/fusion')) {
+          const prev = MQ.state;
+          MQ.state       = msg.state      || 'REST';
+          MQ.effortPct   = msg.effort_pct || 0;
+          MQ.repCompleted= !!msg.rep_completed;
+          // Track good streak for bonus multiplier
+          if (MQ.state === 'GOOD') { MQ.goodStreak++; MQ.bonusActive = MQ.goodStreak >= 2; }
+          else { MQ.goodStreak = 0; MQ.bonusActive = false; }
+          // Trigger feedback if state changed
+          if (MQ.state !== prev) onFusionStateChange(MQ.state, prev);
+        } else if (topic.endsWith('/emg')) {
+          MQ.fatigueAlert = !!msg.fatigue_alert;
+          MQ.contracting  = !!msg.contracting;
+        }
+      } catch(e) { console.warn('[MQTT] parse error', e); }
+    });
+  } catch(e) {
+    console.warn('[MQTT] Could not connect to broker:', e.message);
+  }
+}
+
+function updateMQTTBadge(connected) {
+  // Update the MQTT button in the header if it exists
+  const btn = document.getElementById('btnMQTT');
+  if (!btn) return;
+  btn.className = 'hw-btn' + (connected ? ' conn' : ' err');
+  btn.querySelector('span').textContent = connected
+    ? 'MQTT Live' : 'MQTT Offline';
+}
+
+// Called when fusion state transitions to a new value
+function onFusionStateChange(newState, prevState) {
+  const now = performance.now();
+  if (now - MQ.lastFbTime < 1200) return;  // throttle: max 1 toast per 1.2s
+  MQ.lastFbTime = now;
+  const cx = GW / 2, cy = GH / 2;
+  switch(newState) {
+    case 'GOOD':
+      fb('GOOD rep! +bonus', cx, cy - 60, '#22dd7a');
+      // Flash green border on canvas for 600ms
+      flashBorder('#22dd7a', 600);
+      break;
+    case 'INTENT_BLOCKED':
+      fb('We see you trying! Keep going', cx, cy - 60, '#ffaa22');
+      flashBorder('#ffaa22', 800);
+      break;
+    case 'PASSIVE_MOVE':
+      fb('Use your muscles to move', cx, cy - 60, '#7c4dff');
+      break;
+    case 'REST':
+      // No toast on REST — too frequent
+      break;
+  }
+}
+
+let _borderFlash = null;
+function flashBorder(color, durationMs) {
+  const gc = document.getElementById('gc');
+  if (!gc) return;
+  gc.style.boxShadow = '0 0 0 3px ' + color;
+  clearTimeout(_borderFlash);
+  _borderFlash = setTimeout(() => { gc.style.boxShadow = ''; }, durationMs);
+}
+
+// ─── Serial / ESP32 ────────────────────────────────────
 async function connectSerial() {
   if (HW.serialOK) { await disconnectSerial(); return; }
   if (!('serial' in navigator)) {
@@ -470,7 +580,13 @@ const FBS=[];
 function fb(txt,x,y,col=C.G){FBS.push({txt,x,y,col,ttl:1.4,vy:-52});}
 function updFB(dt){FBS.forEach(f=>{f.ttl-=dt;f.y+=f.vy*dt;});FBS.splice(0,FBS.length,...FBS.filter(f=>f.ttl>0));}
 function drwFB(){FBS.forEach(f=>{ctx.globalAlpha=clamp(f.ttl,0,1);ctx.fillStyle=f.col;ctx.font='bold 21px Space Grotesk';ctx.textAlign='center';ctx.fillText(f.txt,f.x,f.y);ctx.globalAlpha=1;});}
-function hit(b=1){streak++;score+=Math.round(10*b*(1+streak*.1));if(streak>2&&streak%5===0)autoD(true);}
+function hit(b=1){
+  // FIX: apply MQTT fusion bonus multiplier when on a GOOD streak
+  const mqBonus = (MQ.bonusActive && MQ.state === 'GOOD') ? 1.5 : 1.0;
+  streak++;
+  score += Math.round(10 * b * mqBonus * (1 + streak * .1));
+  if(streak > 2 && streak % 5 === 0) autoD(true);
+}
 function miss(){streak=0;autoD(false);}
 function autoD(up){if(up&&diff==='easy')setD('medium');else if(up&&diff==='medium')setD('hard');else if(!up&&diff==='hard')setD('medium');else if(!up&&diff==='medium')setD('easy');}
 function setD(d){diff=d;['easy','medium','hard'].forEach(x=>document.getElementById('d'+x[0].toUpperCase()+x.slice(1)).classList.toggle('ad',x===d));}
@@ -506,11 +622,27 @@ function updSB(inp){
   document.getElementById('hTime').textContent=Math.max(0,Math.ceil(tLeft));
   const rom=HW.camOK?(Math.abs(HW.wristAngle)*1.5+28).toFixed(0):'--';
   document.getElementById('hRom').textContent=rom+(rom!='--'?'°':'');
-  const perf=inp.emgR>.55?'good':inp.emgR>.25?'compensating':'poor';
-  const el=document.getElementById('hPerf');
-  const pm={good:['g','🟢 GOOD'],compensating:['c','🟡 COMP'],poor:['p','🔴 POOR']};
-  const [pc,pl]=pm[perf]||pm.compensating;
-  el.className='perf '+pc; el.textContent=pl;
+  // If MQTT is connected, use fusion state from pipeline; else fall back to local EMG
+  let pc, pl;
+  if (MQ.connected && MQ.state !== 'REST') {
+    const mqMap = {
+      'GOOD':           ['g', '🟢 GOOD'],
+      'INTENT_BLOCKED': ['c', '🟡 INTENT'],
+      'PASSIVE_MOVE':   ['p', '🔵 PASSIVE'],
+    };
+    [pc, pl] = mqMap[MQ.state] || ['c', '🟡 COMP'];
+  } else {
+    const perf = inp.emgR>.55 ? 'good' : inp.emgR>.25 ? 'compensating' : 'poor';
+    const pm = {good:['g','🟢 GOOD'],compensating:['c','🟡 COMP'],poor:['p','🔴 POOR']};
+    [pc, pl] = pm[perf] || pm.compensating;
+  }
+  const el = document.getElementById('hPerf');
+  el.className = 'perf ' + pc; el.textContent = pl;
+  // Show fatigue warning overlay if needed
+  if (MQ.fatigueAlert) {
+    fb('REST — fatigue detected', GW/2, 40, '#ff3d5a');
+    MQ.fatigueAlert = false;  // show once per alert
+  }
 }
 
 // ───── GAME 0: BUBBLE POP ─────────────────────
@@ -831,6 +963,7 @@ function endSess(){
 
 // Boot
 showOv(); drwEMG();
+connectMQTT();   // Connect to Python pipeline MQTT broker
 </script>
 </body>
 </html>
