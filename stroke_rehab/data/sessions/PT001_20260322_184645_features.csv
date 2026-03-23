@@ -1,0 +1,2 @@
+timestamp,patient_id,session_id,rms,mav,zero_crossings,slope_sign_changes,waveform_length,variance,mean_freq,median_freq,peak_amplitude,contraction_ratio,arm_angle,rom,stability,velocity,game_name,score,difficulty,performance_label
+29.125,PT001,PT001_20260322_184645,0.043657,0.02266,57.0,81.0,4.147194,0.001906,125.978575,54.6875,0.281048,0.101562,60.35,52.59,0.7775,0.7562,pump_the_pump,99.0,hard,good

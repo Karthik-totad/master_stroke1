@@ -318,12 +318,22 @@ class MovementTracker:
     def _simulate_motion(self) -> MotionFrame:
         """Generate synthetic motion data when camera is unavailable."""
         t = time.time()
+
+        # Varying grip openness over time (0=closed, 1=open)
+        grip_open = 0.5 + 0.4 * math.sin(t * 0.5)
+        pinch_open = 0.5 + 0.4 * math.sin(t * 0.8)
+
+        # Generate synthetic 21 landmarks for hand
+        # Wrist at center, fingers extend outward based on grip_open
+        landmarks = self._generate_synthetic_landmarks(grip_open, pinch_open)
+
         hand = HandState(
             detected=True,
-            pinch_distance=float(0.5 + 0.4 * math.sin(t * 0.8)),
-            grip_aperture=float(0.5 + 0.3 * math.cos(t * 0.5)),
-            is_open=(math.sin(t * 0.5) > 0),
-            is_pinching=(math.sin(t * 0.8) < -0.5),
+            landmarks=landmarks,
+            pinch_distance=float(np.clip(1.0 - pinch_open, 0, 1)),
+            grip_aperture=float(np.clip(grip_open, 0, 1)),
+            is_open=grip_open > 0.6,
+            is_pinching=pinch_open < 0.3,
             wrist_angle=float(20 * math.sin(t * 0.3)),
         )
         pose = PoseState(
@@ -339,3 +349,187 @@ class MovementTracker:
             stability=float(0.85 + 0.1 * math.sin(t * 2)),
             rom=float(45 + 10 * math.sin(t * 0.2)),
         )
+
+    def _generate_synthetic_landmarks(self, grip_open, pinch_open):
+        """Generate 21 synthetic hand landmarks for simulation."""
+        # Wrist at origin-ish
+        wrist = (0.5, 0.7, 0.0)
+
+        # MCP positions (knuckles) - fixed relative to wrist, closer to wrist
+        mcps = [
+            (0.42, 0.62, 0.0),  # thumb MCP (index 2) - closer to wrist
+            (0.46, 0.55, 0.0),  # index MCP (index 5)
+            (0.50, 0.53, 0.0),  # middle MCP (index 9)
+            (0.54, 0.55, 0.0),  # ring MCP (index 13)
+            (0.58, 0.60, 0.0),  # pinky MCP (index 17)
+        ]
+
+        # Generate tip positions based on grip openness
+        # Extension = (tip_dist / mcp_dist) - 1.0
+        # We want: when grip_open=0 -> extension ~0, when grip_open=1 -> extension ~1
+        # So: tip_dist = mcp_dist * (1 + extension) = mcp_dist * (1 + grip_open)
+        def tip_from_mcp(mcp, wrist_pos, openness, scale=1.0):
+            # Direction from wrist to MCP (finger base direction)
+            dir_x = mcp[0] - wrist_pos[0]
+            dir_y = mcp[1] - wrist_pos[1]
+            mcp_dist = math.hypot(dir_x, dir_y)
+
+            # Normalized direction
+            if mcp_dist > 0:
+                dir_x /= mcp_dist
+                dir_y /= mcp_dist
+
+            # Tip distance from wrist: mcp_dist * (1 + extension)
+            # Extension varies with openness (0 to 1) and per-finger scale
+            extension = openness * scale  # 0 to scale
+            tip_dist = mcp_dist * (1.0 + extension)
+
+            return (
+                wrist_pos[0] + dir_x * tip_dist,
+                wrist_pos[1] + dir_y * tip_dist,
+                0.0
+            )
+
+        # Per-finger extension scales (thumb moves differently)
+        # Thumb: more independent, Index/Middle: full range, Ring/Pinky: slightly less
+        extension_scales = [0.7, 1.0, 1.0, 0.85, 0.7]  # thumb, index, middle, ring, pinky
+
+        # Build 21 landmarks in MediaPipe order
+        # 0: wrist, 1-4: thumb, 5-8: index, 9-12: middle, 13-16: ring, 17-20: pinky
+        lm = [wrist]  # index 0
+
+        # Thumb (indices 1-4): CMC, MCP, IP, TIP
+        # Thumb has different anatomy - treat specially
+        thumb_mcp = mcps[0]
+        thumb_dir_x = thumb_mcp[0] - wrist[0]
+        thumb_dir_y = thumb_mcp[1] - wrist[1]
+        thumb_mcp_dist = math.hypot(thumb_dir_x, thumb_dir_y)
+
+        thumb_cmc = (wrist[0] + thumb_dir_x * 0.5, wrist[1] + thumb_dir_y * 0.5, 0.0)
+        thumb_mcp_pos = thumb_mcp
+        # Thumb IP and TIP extend based on pinch_open (thumb is more independent)
+        thumb_ext = pinch_open * 0.8
+        thumb_tip_dist = thumb_mcp_dist * (1.0 + thumb_ext)
+        thumb_tip = (wrist[0] + thumb_dir_x/thumb_mcp_dist * thumb_tip_dist,
+                     wrist[1] + thumb_dir_y/thumb_mcp_dist * thumb_tip_dist, 0.0)
+        thumb_ip = (thumb_mcp_pos[0] + thumb_tip[0]) / 2, (thumb_mcp_pos[1] + thumb_tip[1]) / 2, 0.0
+        lm.extend([thumb_cmc, thumb_mcp_pos, thumb_ip, thumb_tip])
+
+        # Index (indices 5-8): MCP, PIP, DIP, TIP
+        index_mcp = mcps[1]
+        index_tip = tip_from_mcp(index_mcp, wrist, grip_open, extension_scales[1])
+        index_pip = (index_mcp[0] * 0.6 + index_tip[0] * 0.4,
+                     index_mcp[1] * 0.6 + index_tip[1] * 0.4, 0.0)
+        index_dip = (index_pip[0] * 0.5 + index_tip[0] * 0.5,
+                     index_pip[1] * 0.5 + index_tip[1] * 0.5, 0.0)
+        lm.extend([index_mcp, index_pip, index_dip, index_tip])
+
+        # Middle (indices 9-12): MCP, PIP, DIP, TIP
+        middle_mcp = mcps[2]
+        middle_tip = tip_from_mcp(middle_mcp, wrist, grip_open, extension_scales[2])
+        middle_pip = (middle_mcp[0] * 0.6 + middle_tip[0] * 0.4,
+                      middle_mcp[1] * 0.6 + middle_tip[1] * 0.4, 0.0)
+        middle_dip = (middle_pip[0] * 0.5 + middle_tip[0] * 0.5,
+                      middle_pip[1] * 0.5 + middle_tip[1] * 0.5, 0.0)
+        lm.extend([middle_mcp, middle_pip, middle_dip, middle_tip])
+
+        # Ring (indices 13-16): MCP, PIP, DIP, TIP
+        ring_mcp = mcps[3]
+        ring_tip = tip_from_mcp(ring_mcp, wrist, grip_open, extension_scales[3])
+        ring_pip = (ring_mcp[0] * 0.6 + ring_tip[0] * 0.4,
+                    ring_mcp[1] * 0.6 + ring_tip[1] * 0.4, 0.0)
+        ring_dip = (ring_pip[0] * 0.5 + ring_tip[0] * 0.5,
+                    ring_pip[1] * 0.5 + ring_tip[1] * 0.5, 0.0)
+        lm.extend([ring_mcp, ring_pip, ring_dip, ring_tip])
+
+        # Pinky (indices 17-20): MCP, PIP, DIP, TIP
+        pinky_mcp = mcps[4]
+        pinky_tip = tip_from_mcp(pinky_mcp, wrist, grip_open, extension_scales[4])
+        pinky_pip = (pinky_mcp[0] * 0.6 + pinky_tip[0] * 0.4,
+                     pinky_mcp[1] * 0.6 + pinky_tip[1] * 0.4, 0.0)
+        pinky_dip = (pinky_pip[0] * 0.5 + pinky_tip[0] * 0.5,
+                     pinky_pip[1] * 0.5 + pinky_tip[1] * 0.5, 0.0)
+        lm.extend([pinky_mcp, pinky_pip, pinky_dip, pinky_tip])
+
+        return lm
+
+
+def get_finger_extensions(hand_state):
+    """
+    Returns [thumb, index, middle, ring, pinky] extension values 0.0-1.0.
+    Uses raw MediaPipe landmarks stored on HandState.
+    Extension = how far tip is from wrist relative to MCP base distance.
+    0.0 = fully closed/curled, 1.0 = fully extended/open.
+    """
+    if hand_state is None or not getattr(hand_state, 'detected', False):
+        return [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    lm = getattr(hand_state, 'landmarks', None)
+    if not lm or len(lm) < 21:
+        return [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # MediaPipe hand landmark indices
+    WRIST = 0
+    TIPS = [4, 8, 12, 16, 20]   # thumb, index, middle, ring, pinky tips
+    MCPS = [2, 5, 9, 13, 17]    # corresponding MCP (knuckle) joints
+
+    def dist(a, b):
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    wrist = lm[WRIST]  # (x, y, z)
+    result = []
+
+    for tip_idx, mcp_idx in zip(TIPS, MCPS):
+        tip = lm[tip_idx]
+        mcp = lm[mcp_idx]
+
+        tip_dist = dist(tip, wrist)
+        mcp_dist = dist(mcp, wrist)
+
+        # Extension: how much further tip is from wrist than knuckle
+        extension = (tip_dist / max(mcp_dist, 1e-6)) - 1.0
+        extension = max(0.0, min(1.0, extension))  # clamp to [0, 1]
+        result.append(round(extension, 3))
+
+    return result
+
+
+# Module-level storage for previous tip positions (persists between calls)
+_prev_tips = {}  # key: patient_id or "default", value: list of 5 tip positions
+
+
+def get_finger_moving(hand_state, patient_id="default", threshold=0.04):
+    """
+    Returns [bool x5] — True if that finger moved since last frame.
+    Uses frame-to-frame tip landmark delta for per-finger movement detection.
+    """
+    global _prev_tips
+
+    if hand_state is None or not getattr(hand_state, 'detected', False):
+        return [False, False, False, False, False]
+
+    lm = getattr(hand_state, 'landmarks', None)
+    if not lm or len(lm) < 21:
+        return [False, False, False, False, False]
+
+    # MediaPipe tip indices: thumb, index, middle, ring, pinky
+    TIPS = [4, 8, 12, 16, 20]
+
+    # Get current tip positions (x, y)
+    curr = [np.array([lm[i][0], lm[i][1]]) for i in TIPS]
+
+    # Get previous positions for this patient
+    prev = _prev_tips.get(patient_id)
+
+    # Compute movement
+    moving = [False, False, False, False, False]
+    if prev is not None and len(prev) == 5:
+        moving = [
+            bool(np.linalg.norm(curr[i] - prev[i]) > threshold)
+            for i in range(5)
+        ]
+
+    # Store current for next call
+    _prev_tips[patient_id] = curr
+
+    return moving

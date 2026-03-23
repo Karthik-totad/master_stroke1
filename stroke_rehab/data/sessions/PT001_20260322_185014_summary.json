@@ -1,0 +1,25 @@
+{
+  "session_id": "PT001_20260322_185014",
+  "patient_id": "PT001",
+  "start_time": "2026-03-22T18:50:14.059705",
+  "duration_seconds": 86.2,
+  "total_windows": 1,
+  "emg": {
+    "mean_rms": 0.0127,
+    "max_rms": 0.0127,
+    "mean_contraction_ratio": 0.0
+  },
+  "motion": {
+    "mean_rom": 40.31,
+    "max_rom": 40.31,
+    "mean_stability": 0.9485
+  },
+  "game": {
+    "mean_score": 99.0,
+    "dominant_performance": "good",
+    "label_distribution": {
+      "good": 1
+    }
+  },
+  "csv_path": "C:\\Users\\p vinay kumar\\Desktop\\master_stroke1\\stroke_rehab\\data\\sessions\\PT001_20260322_185014_features.csv"
+}

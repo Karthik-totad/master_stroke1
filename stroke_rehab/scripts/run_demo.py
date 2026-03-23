@@ -20,14 +20,17 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import DEFAULT_PATIENT_ID, EMG_WINDOW_SIZE
+from config import DEFAULT_PATIENT_ID, EMG_WINDOW_SIZE, PATIENT_ID, MQTT_BROKER, MQTT_PORT
 from data_acquisition.emg_reader import create_emg_reader
 from data_acquisition.preprocessor import EMGPreprocessor
 from data_acquisition.session_logger import SessionLogger
-from vision.tracker import MovementTracker
+from vision.tracker import MovementTracker, get_finger_extensions, get_finger_moving
 from ml.trainer import PerformancePredictor, ProgressTracker, PerformanceTrainer
 from ml.doctor_report import DoctorReportParser, create_sample_report, SAMPLE_REPORT
 from game.game_engine import adapt_inputs, GameInputs
+from core.fusion_engine import FusionEngine
+from core.recovery_tracker import RecoveryTracker, init_db, save_session, load_session_history, print_recovery_report
+from core.mqtt_publisher import MQTTPublisher
 
 
 def parse_args():
@@ -115,18 +118,37 @@ def pipeline_demo(args):
     # Progress tracker
     progress = ProgressTracker(args.patient_id)
 
+    # Initialize fusion and recovery
+    db_con = init_db()
+    mqtt_pub = MQTTPublisher(MQTT_BROKER, MQTT_PORT, PATIENT_ID)
+    
+    # Wait for MQTT connection to establish
+    time.sleep(1.0)
+    print(f"[MQTT] Publisher connected: {mqtt_pub.connected}")
+    
+    fusion_eng = FusionEngine()
+    rec_tracker = RecoveryTracker(PATIENT_ID, db_con, mqtt_pub)
+    trainer = PerformanceTrainer()  # For online learning
+
     print(f"\n[Pipeline] Running for {args.duration}s ...\n")
+    
+    # Wait for EMG buffer to fill initially
+    print("[Pipeline] Waiting for EMG buffer to fill...")
+    time.sleep(1.0)
 
     start = time.time()
     window_count = 0
     labels = []
+    last_mqtt = 0.0
+    last_status_print = 0.0
 
     try:
         while time.time() - start < args.duration:
-            # Collect EMG window
-            raw = np.array(reader.read_available())
+            # Collect EMG window - use blocking read to ensure we get data
+            raw = np.array(reader.read(EMG_WINDOW_SIZE))
             if len(raw) < EMG_WINDOW_SIZE:
-                time.sleep(0.1)
+                print(f"[Pipeline] Warning: only got {len(raw)} samples, expected {EMG_WINDOW_SIZE}")
+                time.sleep(0.05)
                 continue
 
             raw_window = raw[-EMG_WINDOW_SIZE:]
@@ -134,6 +156,100 @@ def pipeline_demo(args):
 
             # Vision (simulated)
             _, motion_frame = tracker.read_frame()
+
+            # Fusion: combine EMG + vision
+            finger_extensions = get_finger_extensions(motion_frame.hand)
+            finger_moving = get_finger_moving(motion_frame.hand)
+            
+            # Convert EMGFeatures to dict for fusion engine
+            emg_features_dict = {
+                "rms": features.rms,
+                "mav": features.mav,
+                "zero_crossings": features.zc,
+                "slope_sign_changes": features.ssc,
+                "waveform_length": features.wl,
+                "variance": features.var,
+                "mean_freq": features.mean_freq,
+                "median_freq": features.median_freq,
+                "peak_amplitude": features.peak_amp,
+                "contraction_ratio": features.contraction_ratio,
+            }
+            fusion_result = fusion_eng.classify(emg_features_dict, finger_extensions, finger_moving)
+
+            # Log rep to recovery tracker (only if fusion produced a result)
+            if fusion_result:
+                rep = rec_tracker.log_rep(fusion_result)
+
+                # Publish rep completion events (only when rep_completed)
+                if fusion_result.get("rep_completed"):
+                    mqtt_pub.publish("fusion", {
+                        "state": fusion_result["state"],
+                        "effort_pct": fusion_result["effort_pct"],
+                        "rep_number": fusion_result["reps"],
+                        "score_delta": fusion_result.get("score_delta", 0),
+                        "rep_completed": True,
+                        "ts": time.time(),
+                    })
+                    mqtt_pub.publish("game", fusion_eng.get_game_state())
+
+                    # Get performance label from fusion state and connect to ML
+                    perf_label = fusion_eng.get_performance_label()
+
+                    if perf_label:
+                        # Adjust therapy plan difficulty based on current performance
+                        plan.adjust_difficulty(perf_label)
+
+                        # Log labelled sample for future model retraining
+                        trainer.log_labelled_sample(
+                            emg_features = emg_features_dict,
+                            motion       = {
+                                "arm_angle" : motion_frame.pose.arm_angle,
+                                "rom"       : motion_frame.rom,
+                                "stability" : motion_frame.stability,
+                                "velocity"  : motion_frame.pose.velocity,
+                            },
+                            performance_label = perf_label,
+                            session_id        = logger.session_id,
+                        )
+
+                        # Retrain model in background if enough new data has accumulated
+                        if trainer.should_retrain():
+                            threading.Thread(
+                                target=trainer.train,
+                                kwargs={"use_real_data": True},
+                                daemon=True
+                            ).start()
+                            print("[ML] Background retraining started — new real data available")
+
+            # Continuous MQTT streaming (every 50ms, regardless of fusion state)
+            now = time.time()
+            if now - last_mqtt > 0.05:  # 50ms rate limit
+                mqtt_pub.publish("emg", {
+                    "rms": features.rms,
+                    "effort_pct": round(features.contraction_ratio * 100, 1),
+                    "contracting": features.contraction_ratio >= 0.35,
+                    "median_freq": features.median_freq,
+                    "fatigue_alert": fusion_result.get("fatigue_alert", False) if fusion_result else False,
+                    "ts": now,
+                })
+                # Continuous fusion state
+                mqtt_pub.publish("fusion", {
+                    "state": fusion_result["state"] if fusion_result else "REST",
+                    "effort_pct": fusion_result.get("effort_pct", 0) if fusion_result else 0,
+                    "rep_completed": False,
+                    "ts": now,
+                })
+                # Handpose data
+                if motion_frame and motion_frame.hand:
+                    extensions = get_finger_extensions(motion_frame.hand)
+                    moving = get_finger_moving(motion_frame.hand)
+                    mqtt_pub.publish("handpose", {
+                        "extensions": extensions,
+                        "moving": moving,
+                        "confidence": getattr(motion_frame.hand, "confidence", 0.9),
+                        "ts": now,
+                    })
+                last_mqtt = now
 
             # ML prediction
             prediction = predictor.predict(
@@ -144,7 +260,7 @@ def pipeline_demo(args):
                 velocity=motion_frame.pose.velocity,
             )
 
-            # Adapt difficulty based on doctor plan
+            # Adapt difficulty based on doctor plan (using ML prediction)
             plan.adjust_difficulty(prediction["label"])
 
             # Log
@@ -183,6 +299,27 @@ def pipeline_demo(args):
         tracker.stop()
         summary = logger.close()
         progress.record_session(summary)
+
+        # Save recovery session
+        session_metrics = rec_tracker.build_metrics()
+        session_id, saved_num, mvc_norm, baseline_mvc = save_session(
+            db_con, PATIENT_ID, session_metrics, rec_tracker.rep_log
+        )
+
+        # Publish session summary
+        mqtt_pub.publish("session_summary", {
+            **session_metrics,
+            "session_number": saved_num,
+            "mvc_normalised": mvc_norm,
+            "baseline_mvc": baseline_mvc,
+            "patient_id": PATIENT_ID,
+            "ts": time.time(),
+        })
+
+        # Print recovery report
+        history = load_session_history(db_con, PATIENT_ID)
+        print_recovery_report(history, PATIENT_ID)
+        db_con.close()
 
         print("\n── Session Summary ────────────────────────────────────")
         print(f"  Total windows:  {window_count}")

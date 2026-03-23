@@ -65,16 +65,28 @@ class TherapyPlan:
         """Ordered list of games to play this session."""
         return [e.game for e in self.exercises]
 
-    def adjust_difficulty(self, performance_label: str) -> "TherapyPlan":
+    def adjust_difficulty(self, performance_label: str) -> None:
         """
         Dynamically adjust exercise difficulty based on ML performance label.
-        Returns updated plan (mutates in-place).
+        Mutates in-place; returns None.
         """
-        difficulty_map = {"poor": "easy", "compensating": "medium", "good": "hard"}
-        target = difficulty_map.get(performance_label, "easy")
+        difficulty_map = {
+            "poor":         "easy",
+            "compensating": "medium",
+            "good":         "hard",
+        }
+        target = difficulty_map.get(performance_label)
+        if target is None:
+            print(f"[TherapyPlan] Unknown performance label '{performance_label}' — no change")
+            return
+        changed = 0
         for ex in self.exercises:
-            ex.difficulty = target
-        return self
+            if ex.difficulty != target:
+                ex.difficulty = target
+                changed += 1
+        if changed:
+            print(f"[TherapyPlan] Adjusted {changed} exercise(s) to difficulty='{target}' "
+                  f"based on performance='{performance_label}'")
 
 
 # ─── Default Game Mapping ─────────────────────────────────────────────────────

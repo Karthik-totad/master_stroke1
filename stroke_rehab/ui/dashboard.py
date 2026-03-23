@@ -1,723 +1,698 @@
 """
 ui/dashboard.py
 
-NeuroRehab — Streamlit dashboard
-Displays:
-  - Live EMG signal chart
-  - Camera feed with tracking overlay
-  - Patient performance metrics
-  - Recovery progress over time
-  - Doctor report viewer
-  - Session controls
+Stroke Rehab Monitor — Streamlit dashboard for remote patient monitoring.
+Receives live MQTT data from patient-side rehabilitation system.
+
+MQTT Topics (published by patient side):
+  rehab/{PATIENT_ID}/emg           → EMG signal metrics
+  rehab/{PATIENT_ID}/handpose      → OpenCV hand tracking data
+  rehab/{PATIENT_ID}/fusion        → Fusion engine state classification
+  rehab/{PATIENT_ID}/game          → Game progress (score, reps, level)
+  rehab/{PATIENT_ID}/alerts        → Doctor alerts (fatigue, motor block)
+  rehab/{PATIENT_ID}/session_summary → Session end summary
 """
 
 import sys
 import os
 import time
 import json
-import random
-import math
-from datetime import datetime, timedelta
+import threading
+import queue
+from collections import deque
+from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
+from plotly.subplots import make_subplots
+from streamlit_autorefresh import st_autorefresh
 
+# MQTT client
+try:
+    import paho.mqtt.client as mqtt
+    PAHO_AVAILABLE = True
+    # Check for paho-mqtt v2 API
+    try:
+        from paho.mqtt.enums import CallbackAPIVersion
+        PAHO_V2 = True
+    except ImportError:
+        PAHO_V2 = False
+except ImportError:
+    PAHO_AVAILABLE = False
+    PAHO_V2 = False
+
+# Config and core imports
 from config import (
-    SESSION_DIR, REPORT_DIR, MODEL_DIR, DEFAULT_PATIENT_ID, EMG_SOURCE
+    MQTT_BROKER, MQTT_PORT, PATIENT_ID,
+    DASHBOARD_REFRESH_MS, EMG_HISTORY_LENGTH, ALERT_MAX_COUNT, REP_LOG_MAX_COUNT,
+    FUSION_COLORS, EMG_THRESHOLD_PCT
 )
-from data_acquisition.emg_reader import create_emg_reader, SimulatedEMGReader
-from data_acquisition.preprocessor import EMGPreprocessor, EMGFeatures
-from ml.trainer import PerformancePredictor, ProgressTracker, ALL_FEATURES
-from ml.doctor_report import DoctorReportParser, create_sample_report
+from core.recovery_tracker import load_session_history, init_db
 
-# ─── Page config ──────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="NeuroRehab",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'Space Grotesk', sans-serif;
-    color: #e0e8ff;
-}
-
-.stApp {
-    background: #080d1a;
-}
-
-.block-container {
-    padding-top: 1.5rem;
-}
-
-/* Metric cards */
-.metric-card {
-    background: linear-gradient(135deg, #0f1729 0%, #141e38 100%);
-    border: 1px solid #1e2d5a;
-    border-radius: 12px;
-    padding: 18px 22px;
-    margin: 6px 0;
-    position: relative;
-    overflow: hidden;
-}
-.metric-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0;
-    width: 3px; height: 100%;
-    background: #00c8aa;
-}
-.metric-value {
-    font-size: 2.2rem;
-    font-weight: 700;
-    color: #00c8aa;
-    font-family: 'JetBrains Mono', monospace;
-}
-.metric-label {
-    font-size: 0.78rem;
-    color: #6070a0;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-top: 4px;
-}
-
-/* Status badges */
-.badge-good    { background: #0a2a1a; color: #40dd80; border: 1px solid #40dd80; 
-                 padding: 3px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-.badge-comp    { background: #2a1e0a; color: #ffa030; border: 1px solid #ffa030;
-                 padding: 3px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-.badge-poor    { background: #2a0a0a; color: #ff4060; border: 1px solid #ff4060;
-                 padding: 3px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-
-/* Section headers */
-.section-header {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.15em;
-    color: #3a4a7a;
-    margin-bottom: 8px;
-    margin-top: 16px;
-    border-bottom: 1px solid #1a2040;
-    padding-bottom: 6px;
-}
-
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: #060b18;
-    border-right: 1px solid #141e38;
-}
-
-/* Plotly chart background */
-.js-plotly-plot .plotly {
-    background: transparent !important;
-}
-</style>
-""", unsafe_allow_html=True)
+# Module-level queue for MQTT thread → main thread communication
+# Use singleton pattern to persist across Streamlit reruns (module reloads)
+import sys
+if '_mqtt_queue_singleton' not in sys.modules:
+    sys.modules['_mqtt_queue_singleton'] = queue.Queue()
+_mqtt_queue = sys.modules['_mqtt_queue_singleton']
 
 
-# ─── Session State Init ───────────────────────────────────────────────────────
-def init_state():
+# ─── MQTT Callbacks (run in background thread) ──────────────────────────────────
+
+def _on_connect(client, userdata, flags, rc, properties=None):
+    """Callback when MQTT client connects to broker."""
+    if rc == 0:
+        _mqtt_queue.put({"type": "connection", "status": True})
+        # Subscribe to all patient topics
+        topics = [
+            f"rehab/{PATIENT_ID}/emg",
+            f"rehab/{PATIENT_ID}/handpose",
+            f"rehab/{PATIENT_ID}/fusion",
+            f"rehab/{PATIENT_ID}/game",
+            f"rehab/{PATIENT_ID}/alerts",
+            f"rehab/{PATIENT_ID}/session_summary",
+        ]
+        for topic in topics:
+            client.subscribe(topic, qos=0)
+            print(f"[DASHBOARD MQTT] Subscribed to {topic}")
+    else:
+        _mqtt_queue.put({"type": "connection", "status": False, "rc": rc})
+
+
+def _on_disconnect(client, userdata, rc, properties=None):
+    """Callback when MQTT client disconnects from broker."""
+    _mqtt_queue.put({"type": "connection", "status": False, "rc": rc})
+
+
+def _on_message(client, userdata, msg, properties=None):
+    """Callback when MQTT message received. ONLY puts to queue — no st.* calls."""
+    try:
+        payload = json.loads(msg.payload.decode())
+        print(f"[DASHBOARD MQTT] Received: {msg.topic}")
+        _mqtt_queue.put({
+            "type": "message",
+            "topic": msg.topic,
+            "payload": payload,
+            "timestamp": time.time(),
+        })
+        print(f"[DASHBOARD MQTT] Put to queue, size now: {_mqtt_queue.qsize()}")
+    except json.JSONDecodeError as e:
+        print(f"[DASHBOARD MQTT] JSON error: {e}")
+    except Exception as e:
+        print(f"[DASHBOARD MQTT] Error: {e}")
+
+
+def _start_mqtt_client():
+    """Start MQTT client in a daemon thread. Called once per Streamlit session."""
+    if not PAHO_AVAILABLE:
+        st.error("paho-mqtt not installed. Run: pip install paho-mqtt")
+        return None
+
+    client_id = f"doctor_dashboard_{PATIENT_ID}_{int(time.time())}"
+    st.session_state["mqtt_client_id"] = client_id
+    
+    # Use paho-mqtt v2 API if available
+    if PAHO_V2:
+        from paho.mqtt.enums import CallbackAPIVersion
+        client = mqtt.Client(CallbackAPIVersion.VERSION1, client_id=client_id)
+    else:
+        client = mqtt.Client(client_id=client_id)
+    
+    client.on_connect = _on_connect
+    client.on_disconnect = _on_disconnect
+    client.on_message = _on_message
+
+    try:
+        st.info(f"Connecting to MQTT broker {MQTT_BROKER}:{MQTT_PORT}...")
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        # Start network loop in daemon thread
+        mqtt_thread = threading.Thread(target=client.loop_forever, daemon=True)
+        mqtt_thread.start()
+        st.success(f"MQTT client started (ID: {client_id}, API={'v2' if PAHO_V2 else 'v1'})")
+        return client
+    except Exception as e:
+        st.error(f"MQTT connection failed: {e}")
+        _mqtt_queue.put({"type": "connection", "status": False, "error": str(e)})
+        return None
+
+
+# ─── Session State Initialization ───────────────────────────────────────────────
+
+def _init_session_state():
+    """Initialize all session state keys for dashboard."""
     defaults = {
-        "emg_buffer": [],
-        "emg_reader": None,
-        "preprocessor": None,
-        "predictor": None,
-        "progress_tracker": None,
+        # MQTT connection
+        "mqtt_connected": False,
+        "mqtt_client_started": False,
+        "mqtt_client": None,
+        # EMG data
+        "emg_history": deque(maxlen=EMG_HISTORY_LENGTH),
+        "emg_latest": None,
+        "emg_session_start": None,
+        # Hand pose data
+        "handpose_latest": None,
+        # Fusion data
+        "fusion_latest": None,
+        "rep_log": [],
+        # Game data
+        "game_latest": None,
+        # Alerts
+        "alerts": [],
+        # Session tracking
         "session_active": False,
-        "session_start": None,
-        "patient_id": DEFAULT_PATIENT_ID,
-        "current_label": "compensating",
-        "current_score": 50,
-        "current_rom": 0.0,
-        "current_stability": 1.0,
-        "current_features": None,
-        "therapy_plan": None,
-        "session_log": [],
-        "emg_pattern": "moderate",
+        "session_start_time": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-init_state()
+
+# ─── Queue Draining (main thread only) ────────────────────────────────────────
+
+def _drain_mqtt_queue():
+    """Drain MQTT queue into session_state. Called every rerun in main thread."""
+    # Get reference to the singleton queue
+    mqtt_queue = sys.modules.get('_mqtt_queue_singleton')
+    if mqtt_queue is None:
+        print(f"[DASHBOARD] Queue not initialized!")
+        return
+    
+    queue_size = mqtt_queue.qsize()
+    if queue_size > 0:
+        print(f"[DASHBOARD] Queue has {queue_size} messages")
+    
+    # Process up to 100 messages per frame to avoid blocking rendering
+    processed = 0
+    for _ in range(100):
+        try:
+            item = mqtt_queue.get_nowait()
+        except queue.Empty:
+            break
+        except Exception as e:
+            print(f"[DASHBOARD] Queue error: {e}")
+            break
+
+        processed += 1
+        if item["type"] == "connection":
+            st.session_state["mqtt_connected"] = item.get("status", False)
+            print(f"[DASHBOARD] Connection status: {item.get('status')}")
+
+        elif item["type"] == "message":
+            topic = item["topic"]
+            payload = item["payload"]
+            ts = item.get("timestamp", time.time())
+            print(f"[DASHBOARD] Processing: {topic}")
+
+            # Route by topic suffix
+            if topic.endswith("/emg"):
+                st.session_state["emg_latest"] = payload
+                st.session_state["msg_count_emg"] = st.session_state.get("msg_count_emg", 0) + 1
+                st.session_state["last_topic"] = topic
+                print(f"[DASHBOARD] EMG #{st.session_state['msg_count_emg']}, effort={payload.get('effort_pct', 0):.1f}%")
+                # Add to history for chart
+                effort = payload.get("effort_pct", 0)
+                st.session_state["emg_history"].append({
+                    "time": ts,
+                    "effort_pct": effort,
+                    "contracting": payload.get("contracting", False),
+                    "rms": payload.get("rms", 0),
+                    "median_freq": payload.get("median_freq", 0),
+                    "fatigue_alert": payload.get("fatigue_alert", False),
+                })
+                # Track session start from first EMG message
+                if st.session_state["session_start_time"] is None:
+                    st.session_state["session_start_time"] = ts
+                    st.session_state["session_active"] = True
+
+            elif topic.endswith("/handpose"):
+                st.session_state["handpose_latest"] = payload
+                print(f"[DASHBOARD] Handpose updated")
+
+            elif topic.endswith("/fusion"):
+                st.session_state["fusion_latest"] = payload
+                st.session_state["msg_count_fusion"] = st.session_state.get("msg_count_fusion", 0) + 1
+                st.session_state["last_topic"] = topic
+                print(f"[DASHBOARD] Fusion #{st.session_state['msg_count_fusion']}, state={payload.get('state', 'N/A')}")
+                # Track rep completion
+                if payload.get("rep_completed"):
+                    rep_entry = {
+                        "rep": payload.get("rep_number", len(st.session_state["rep_log"]) + 1),
+                        "state": payload.get("state", "REST"),
+                        "effort_pct": payload.get("effort_pct", 0),
+                        "score_delta": payload.get("score_delta", 0),
+                        "timestamp": ts,
+                    }
+                    st.session_state["rep_log"].append(rep_entry)
+                    # Trim to max
+                    if len(st.session_state["rep_log"]) > REP_LOG_MAX_COUNT:
+                        st.session_state["rep_log"] = st.session_state["rep_log"][-REP_LOG_MAX_COUNT:]
+
+            elif topic.endswith("/game"):
+                st.session_state["game_latest"] = payload
+                st.session_state["msg_count_game"] = st.session_state.get("msg_count_game", 0) + 1
+                st.session_state["last_topic"] = topic
+                print(f"[DASHBOARD] Game #{st.session_state['msg_count_game']}")
+
+            elif topic.endswith("/alerts"):
+                alert_entry = {
+                    "type": payload.get("type", "INFO"),
+                    "message": payload.get("message", ""),
+                    "severity": payload.get("severity", "info"),
+                    "timestamp": ts,
+                }
+                st.session_state["alerts"].insert(0, alert_entry)  # Newest first
+                # Trim to max
+                if len(st.session_state["alerts"]) > ALERT_MAX_COUNT:
+                    st.session_state["alerts"] = st.session_state["alerts"][:ALERT_MAX_COUNT]
+
+            elif topic.endswith("/session_summary"):
+                # Session ended — reset timer but keep history
+                st.session_state["session_start_time"] = None
+                st.session_state["session_active"] = False
+                st.session_state["rep_log"] = []
+                # Clear non-fatigue alerts
+                st.session_state["alerts"] = [
+                    a for a in st.session_state["alerts"]
+                    if a.get("type") != "fatigue"
+                ]
+    if processed > 0:
+        print(f"[DASHBOARD] Processed {processed} messages this frame")
 
 
-# ─── Helper: load/create systems ─────────────────────────────────────────────
-@st.cache_resource
-def get_predictor():
-    return PerformancePredictor()
+# ─── UI Components ─────────────────────────────────────────────────────────────
 
-@st.cache_resource
-def get_preprocessor():
-    return EMGPreprocessor()
+def _render_top_bar():
+    """Render top bar with title, status, and metrics."""
+    col_left, col_right = st.columns([3, 1])
 
+    with col_left:
+        st.title("Stroke Rehab Monitor")
+        # Patient ID badge + connection status
+        connected = st.session_state.get("mqtt_connected", False)
+        status_dot = "🟢" if connected else "🔴"
+        status_text = "Connected" if connected else "Offline"
 
-def get_emg_samples(n: int = 256) -> np.ndarray:
-    """Get fresh EMG samples, creating reader if needed."""
-    if st.session_state.emg_reader is None:
-        st.session_state.emg_reader = create_emg_reader(
-            "simulated", pattern=st.session_state.emg_pattern
-        )
-        time.sleep(0.3)
+        elapsed_str = "--:--"
+        if st.session_state.get("session_start_time"):
+            elapsed = time.time() - st.session_state["session_start_time"]
+            elapsed_str = f"{int(elapsed // 60):02d}:{int(elapsed % 60):02d}"
 
-    samples = st.session_state.emg_reader.read_available()
-    if len(samples) < n:
-        # Pad with previous tail or noise
-        pad = [abs(np.random.randn() * 0.02) for _ in range(n - len(samples))]
-        samples = pad + samples
-    return np.array(samples[-n:])
-
-
-def simulate_motion():
-    """Simulate motion metrics for dashboard."""
-    t = time.time()
-    return {
-        "arm_angle": 90 + 30 * math.sin(t * 0.4),
-        "rom": 45 + 10 * math.sin(t * 0.2),
-        "stability": 0.85 + 0.1 * math.sin(t * 2),
-        "velocity": abs(5 * math.cos(t * 0.4)),
-    }
-
-
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 🧠 NeuroRehab")
-    st.markdown('<div class="section-header">Patient</div>', unsafe_allow_html=True)
-    patient_id = st.text_input("Patient ID", value=st.session_state.patient_id)
-    st.session_state.patient_id = patient_id
-
-    st.markdown('<div class="section-header">EMG Source</div>', unsafe_allow_html=True)
-    emg_src = st.radio("Source", ["Simulated", "Serial (ESP32)", "Bluetooth"],
-                       horizontal=False)
-    if emg_src == "Simulated":
-        pattern = st.select_slider("Signal Pattern",
-                                   ["poor", "moderate", "good"],
-                                   value=st.session_state.emg_pattern)
-        if pattern != st.session_state.emg_pattern:
-            st.session_state.emg_reader = None  # Reset reader
-            st.session_state.emg_pattern = pattern
-    elif emg_src == "Serial (ESP32)":
-        serial_port = st.text_input("Port", "/dev/ttyUSB0")
-        st.caption("Set EMG_SOURCE='serial' in config.py")
-
-    st.markdown('<div class="section-header">Doctor Report</div>', unsafe_allow_html=True)
-    report_files = [f for f in os.listdir(REPORT_DIR) if f.endswith(".json")] if os.path.exists(REPORT_DIR) else []
-    if not report_files:
-        if st.button("📄 Create Sample Report"):
-            create_sample_report()
-            st.rerun()
-    else:
-        selected_report = st.selectbox("Load Report", report_files)
-        if st.button("Load"):
-            parser = DoctorReportParser()
-            plan = parser.parse_file(os.path.join(REPORT_DIR, selected_report))
-            st.session_state.therapy_plan = plan
-            st.success(f"Loaded plan for {plan.patient_id}")
-
-    st.markdown('<div class="section-header">Session</div>', unsafe_allow_html=True)
-    if not st.session_state.session_active:
-        if st.button("▶ Start Session", use_container_width=True, type="primary"):
-            st.session_state.session_active = True
-            st.session_state.session_start = time.time()
-            st.session_state.session_log = []
-    else:
-        elapsed = time.time() - st.session_state.session_start
-        st.metric("Session Time", f"{int(elapsed // 60):02d}:{int(elapsed % 60):02d}")
-        if st.button("⏹ End Session", use_container_width=True):
-            st.session_state.session_active = False
-
-    st.markdown("---")
-    auto_refresh = st.checkbox("Auto-refresh (live)", value=True)
-    refresh_rate = st.slider("Refresh rate (s)", 0.5, 3.0, 1.0, 0.5)
-
-
-# ─── Main layout ──────────────────────────────────────────────────────────────
-st.markdown("# 🧠 NeuroRehab — Rehabilitation Dashboard")
-
-# Top metric row
-col1, col2, col3, col4, col5 = st.columns(5)
-
-# Get live data
-raw_emg = get_emg_samples(256)
-preprocessor = get_preprocessor()
-filtered_emg, features = preprocessor.process_window(raw_emg)
-predictor = get_predictor()
-motion = simulate_motion()
-prediction = predictor.predict(
-    features,
-    arm_angle=motion["arm_angle"],
-    rom=motion["rom"],
-    stability=motion["stability"],
-    velocity=motion["velocity"],
-)
-st.session_state.current_label = prediction["label"]
-st.session_state.current_score = prediction["score"]
-st.session_state.current_rom = motion["rom"]
-st.session_state.current_stability = motion["stability"]
-st.session_state.current_features = features
-
-# Log to session
-if st.session_state.session_active:
-    st.session_state.session_log.append({
-        "time": time.time() - st.session_state.session_start,
-        "rms": float(features.rms),
-        "score": prediction["score"],
-        "label": prediction["label"],
-        "rom": motion["rom"],
-        "stability": motion["stability"],
-    })
-
-label = prediction["label"]
-badge_class = {"good": "badge-good", "compensating": "badge-comp", "poor": "badge-poor"}.get(label, "badge-comp")
-label_emoji = {"good": "🟢", "compensating": "🟡", "poor": "🔴"}.get(label, "🟡")
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-value">{prediction["score"]}</div>
-        <div class="metric-label">Performance Score</div>
-    </div>""", unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-value">{features.rms:.3f}</div>
-        <div class="metric-label">EMG RMS</div>
-    </div>""", unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-value">{motion['rom']:.1f}°</div>
-        <div class="metric-label">Range of Motion</div>
-    </div>""", unsafe_allow_html=True)
-
-with col4:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-value">{motion['stability']:.2f}</div>
-        <div class="metric-label">Stability Index</div>
-    </div>""", unsafe_allow_html=True)
-
-with col5:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div style="margin-top:8px"><span class="{badge_class}">{label_emoji} {label.upper()}</span></div>
-        <div class="metric-label" style="margin-top:10px">Performance Label</div>
-    </div>""", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# Main content area
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Live Monitor", "📈 Progress", "🎮 Games", "📋 Doctor Report"
-])
-
-
-# ─── TAB 1: Live Monitor ──────────────────────────────────────────────────────
-with tab1:
-    left_col, right_col = st.columns([3, 2])
-
-    with left_col:
-        st.markdown('<div class="section-header">Live EMG Signal</div>', unsafe_allow_html=True)
-
-        # Build rolling EMG buffer
-        st.session_state.emg_buffer.extend(filtered_emg.tolist())
-        if len(st.session_state.emg_buffer) > 1000:
-            st.session_state.emg_buffer = st.session_state.emg_buffer[-1000:]
-
-        buffer = np.array(st.session_state.emg_buffer)
-        t_axis = np.linspace(-len(buffer) / 1000, 0, len(buffer))
-
-        fig_emg = go.Figure()
-        fig_emg.add_trace(go.Scatter(
-            x=t_axis, y=buffer,
-            mode="lines",
-            line=dict(color="#00c8aa", width=1.2),
-            fill="tozeroy",
-            fillcolor="rgba(0,200,170,0.08)",
-            name="EMG",
-        ))
-        # Activation threshold line
-        fig_emg.add_hline(y=0.05, line_dash="dot",
-                          line_color="rgba(255,160,0,0.5)",
-                          annotation_text="threshold")
-        fig_emg.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(8,13,26,0.8)",
-            height=220,
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis=dict(showgrid=False, color="#3a4a7a", title="Time (s)"),
-            yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a",
-                       range=[0, 1], title="Amplitude"),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_emg, use_container_width=True)
-
-        st.markdown('<div class="section-header">EMG Feature Breakdown</div>', unsafe_allow_html=True)
-        feat_names = EMGFeatures.feature_names()
-        feat_vals = features.to_array()
-        norm_vals = np.clip(feat_vals / (np.max(feat_vals) + 1e-6), 0, 1)
-
-        fig_feat = go.Figure(go.Bar(
-            x=feat_names,
-            y=feat_vals,
-            marker=dict(
-                color=norm_vals,
-                colorscale=[[0, "#0a1520"], [0.5, "#004488"], [1.0, "#00c8aa"]],
-                line=dict(color="#00c8aa", width=0.5),
-            ),
-        ))
-        fig_feat.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(8,13,26,0.8)",
-            height=200,
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis=dict(showgrid=False, color="#3a4a7a", tickangle=-30),
-            yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a"),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_feat, use_container_width=True)
-
-    with right_col:
-        st.markdown('<div class="section-header">Performance Probabilities</div>', unsafe_allow_html=True)
-        probs = prediction.get("probabilities", {})
-        labels_ord = ["poor", "compensating", "good"]
-        prob_vals = [probs.get(l, 0) for l in labels_ord]
-        colors_p = ["#ff4060", "#ffa030", "#40dd80"]
-
-        fig_probs = go.Figure(go.Bar(
-            x=prob_vals, y=labels_ord,
-            orientation="h",
-            marker_color=colors_p,
-            text=[f"{v*100:.0f}%" for v in prob_vals],
-            textposition="inside",
-        ))
-        fig_probs.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(8,13,26,0.8)",
-            height=180,
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis=dict(showgrid=False, color="#3a4a7a", range=[0, 1]),
-            yaxis=dict(color="#6070a0"),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_probs, use_container_width=True)
-
-        st.markdown('<div class="section-header">Motion Metrics</div>', unsafe_allow_html=True)
-        # Gauge chart for stability
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=motion["stability"] * 100,
-            title={"text": "Stability", "font": {"color": "#6070a0", "size": 13}},
-            gauge={
-                "axis": {"range": [0, 100], "tickcolor": "#3a4a7a"},
-                "bar": {"color": "#00c8aa"},
-                "bgcolor": "#0f1729",
-                "bordercolor": "#1e2d5a",
-                "steps": [
-                    {"range": [0, 40], "color": "#2a0a0a"},
-                    {"range": [40, 70], "color": "#2a1e0a"},
-                    {"range": [70, 100], "color": "#0a2a1a"},
-                ],
-                "threshold": {
-                    "line": {"color": "#00c8aa", "width": 2},
-                    "thickness": 0.75,
-                    "value": motion["stability"] * 100,
-                },
-            },
-            number={"suffix": "%", "font": {"color": "#00c8aa", "size": 22}},
-        ))
-        fig_gauge.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            height=200,
-            margin=dict(l=20, r=20, t=20, b=0),
-        )
-        st.plotly_chart(fig_gauge, use_container_width=True)
-
-        # ROM bar
         st.markdown(f"""
-        <div class="metric-card">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <div class="metric-value">{motion['rom']:.1f}°</div>
-                    <div class="metric-label">Range of Motion</div>
-                </div>
-                <div style="font-size:2rem">💪</div>
-            </div>
-            <div style="margin-top:10px; background:#0a0f1e; border-radius:4px; height:6px;">
-                <div style="width:{min(100, motion['rom']/90*100):.0f}%; height:6px;
-                            background:#00c8aa; border-radius:4px;"></div>
-            </div>
-            <div class="metric-label" style="margin-top:4px">Target: 90°</div>
-        </div>""", unsafe_allow_html=True)
+        <div style="display:flex; gap:20px; align-items:center; margin-bottom:10px;">
+            <span style="background:#1e2d5a; padding:4px 12px; border-radius:12px; font-size:0.9rem;">
+                Patient: <b>{PATIENT_ID}</b>
+            </span>
+            <span style="font-size:0.9rem;">{status_dot} {status_text}</span>
+            <span style="font-size:0.9rem; color:#00c8aa;">⏱ {elapsed_str}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-        st.markdown('<div class="section-header">Session Activity</div>', unsafe_allow_html=True)
-        if st.session_state.session_active:
-            elapsed = time.time() - st.session_state.session_start
-            log = st.session_state.session_log
-            n_windows = len(log)
-            label_counts = {}
-            for entry in log:
-                l = entry.get("label", "")
-                label_counts[l] = label_counts.get(l, 0) + 1
+    with col_right:
+        # 4 metric cards in 2x2 grid
+        game = st.session_state.get("game_latest") or {}
+        emg = st.session_state.get("emg_latest") or {}
+
+        m1, m2 = st.columns(2)
+        with m1:
+            st.metric("Score", game.get("score", 0))
+        with m2:
+            st.metric("Reps", game.get("reps", 0))
+
+        m3, m4 = st.columns(2)
+        with m3:
+            st.metric("Level", game.get("level", 1))
+        with m4:
+            effort = emg.get("effort_pct", 0)
+            st.metric("Effort", f"{effort:.0f}%")
+
+    return connected
+
+
+def _render_emg_chart():
+    """Render live EMG signal chart with history."""
+    st.markdown("### Live EMG Signal")
+
+    emg_history = st.session_state.get("emg_history", deque())
+    if not emg_history:
+        st.info("Waiting for EMG data...")
+        return
+
+    # Convert deque to list for plotting
+    history_list = list(emg_history)
+    times = [(h["time"] - history_list[0]["time"]) - (history_list[-1]["time"] - history_list[0]["time"])
+             for h in history_list]
+    efforts = [h["effort_pct"] for h in history_list]
+    contracting = [h["contracting"] for h in history_list]
+
+    # Build color array based on contracting state
+    colors = [FUSION_COLORS["GOOD"] if c else FUSION_COLORS["REST"] for c in contracting]
+
+    fig = go.Figure()
+
+    # Main line
+    fig.add_trace(go.Scatter(
+        x=times, y=efforts,
+        mode="lines",
+        line=dict(color="#00c8aa", width=2),
+        fill="tozeroy",
+        fillcolor="rgba(0,200,170,0.1)",
+        name="Effort %",
+    ))
+
+    # Threshold line
+    threshold = EMG_THRESHOLD_PCT * 100
+    fig.add_hline(y=threshold, line_dash="dash", line_color="rgba(255,160,0,0.7)",
+                  annotation_text=f"Threshold ({threshold:.0f}%)")
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(8,13,26,0.8)",
+        height=250,
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis=dict(showgrid=False, color="#3a4a7a", title="Time (s)",
+                   range=[times[0] if times else -30, 0]),
+        yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a",
+                   range=[0, 105], title="Effort %"),
+        showlegend=False,
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Inline metrics
+    if history_list:
+        latest = history_list[-1]
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Peak", f"{latest.get('effort_pct', 0):.0f}%")
+        with c2:
+            st.metric("RMS", f"{latest.get('rms', 0)*1000:.1f} mV")
+        with c3:
+            st.metric("Freq", f"{latest.get('median_freq', 0):.0f} Hz")
+
+        # Fatigue alert
+        if latest.get("fatigue_alert"):
+            st.warning("⚠️ Fatigue Alert — Consider rest period")
+
+
+def _render_hand_pose():
+    """Render hand pose finger extension bars."""
+    st.markdown("### Hand Pose (OpenCV)")
+
+    handpose = st.session_state.get("handpose_latest")
+    if handpose is None:
+        st.info("Waiting for hand detection...")
+        return
+
+    extensions = handpose.get("extensions", [0, 0, 0, 0, 0])
+    moving = handpose.get("moving", [False, False, False, False, False])
+    finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+
+    for name, ext, mov in zip(finger_names, extensions, moving):
+        indicator = "●" if mov else "○"
+        label = f"{name}: {ext:.0%} {indicator}"
+        st.progress(ext, text=label)
+
+    # Confidence and moving count
+    conf = handpose.get("confidence", 0)
+    moving_count = sum(moving)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Confidence", f"{conf:.0%}")
+    with c2:
+        st.metric("Moving", f"{moving_count} fingers")
+
+
+def _render_fusion_state():
+    """Render fusion state badge and rep history."""
+    st.markdown("### Fusion State")
+
+    fusion = st.session_state.get("fusion_latest")
+    if fusion is None:
+        st.info("Waiting for fusion data...")
+        return
+
+    state = fusion.get("state", "REST")
+    color = FUSION_COLORS.get(state, FUSION_COLORS["REST"])
+
+    # Large colored badge
+    st.markdown(f"""
+    <div style="background:{color}; padding:15px; border-radius:12px; text-align:center;
+                color:white; font-size:1.4rem; font-weight:bold; margin-bottom:15px;">
+        {state.replace('_', ' ')}
+    </div>
+    """, unsafe_allow_html=True)
+
+    # State explanation
+    explanations = {
+        "GOOD": "Intent + movement detected — reward rep",
+        "INTENT_BLOCKED": "Trying but blocked — encourage patient",
+        "PASSIVE_MOVE": "Movement without intent — passive assist",
+        "REST": "Patient resting",
+    }
+    st.caption(explanations.get(state, ""))
+
+    # Last 5 reps table
+    rep_log = st.session_state.get("rep_log", [])
+    if rep_log:
+        st.markdown("**Recent Reps:**")
+        recent_reps = rep_log[-5:][::-1]  # Newest first
+        for r in recent_reps:
+            rep_num = r.get("rep", 0)
+            rep_state = r.get("state", "REST")
+            effort = r.get("effort_pct", 0)
+            st.markdown(f"• Rep {rep_num}: {rep_state} ({effort:.0f}% effort)")
+
+
+def _render_game_progress():
+    """Render game progress section."""
+    st.markdown("### Session Progress")
+
+    game = st.session_state.get("game_latest") or {}
+    score = game.get("score", 0)
+    reps = game.get("reps", 0)
+    level = game.get("level", 1)
+
+    # Progress bar (target 30 reps)
+    target_reps = 30
+    progress = min(1.0, reps / target_reps)
+    st.progress(progress, text=f"Reps: {reps} / {target_reps}")
+
+    # Rep quality chart (last 20 reps)
+    rep_log = st.session_state.get("rep_log", [])
+    if rep_log:
+        recent = rep_log[-20:]
+        rep_nums = [r["rep"] for r in recent]
+        efforts = [r["effort_pct"] for r in recent]
+        colors = [FUSION_COLORS.get(r["state"], FUSION_COLORS["REST"]) for r in recent]
+
+        fig = go.Figure(go.Bar(
+            x=rep_nums, y=efforts,
+            marker_color=colors,
+            text=[f"{e:.0f}%" for e in efforts],
+            textposition="outside",
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(8,13,26,0.8)",
+            height=200,
+            margin=dict(l=0, r=0, t=20, b=0),
+            xaxis=dict(showgrid=False, color="#3a4a7a", title="Rep #"),
+            yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a",
+                       range=[0, 105], title="Effort %"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Performance label from fusion state
+    fusion = st.session_state.get("fusion_latest")
+    if fusion:
+        from core.fusion_engine import FusionEngine
+        perf_label = FusionEngine.FUSION_TO_PERFORMANCE.get(fusion.get("state"), None)
+        if perf_label:
+            perf_color = {"good": "#1D9E75", "compensating": "#EF9F27", "poor": "#378ADD"}.get(perf_label, "#888780")
             st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Session Running</div>
-                <div style="margin-top:6px; font-size:1.1rem; color:#00c8aa;">
-                    ⏱ {int(elapsed//60):02d}:{int(elapsed%60):02d} &nbsp;|&nbsp;
-                    📊 {n_windows} windows
-                </div>
-                <div style="margin-top:8px">
-                    {''.join([f'<span class="badge-good">{label_counts.get("good",0)} good</span>&nbsp;'
-                              f'<span class="badge-comp">{label_counts.get("compensating",0)} comp</span>&nbsp;'
-                              f'<span class="badge-poor">{label_counts.get("poor",0)} poor</span>'])}
-                </div>
-            </div>""", unsafe_allow_html=True)
+            <div style="display:inline-block; background:{perf_color}; padding:6px 14px;
+                        border-radius:20px; color:white; font-weight:600;">
+                Performance: {perf_label.upper()}
+            </div>
+            """, unsafe_allow_html=True)
+
+
+def _render_recovery_trend():
+    """Render recovery trend from SQLite database."""
+    st.markdown("### Recovery Trend")
+
+    try:
+        con = init_db()
+        history = load_session_history(con, PATIENT_ID, last_n=15)
+        con.close()
+    except Exception:
+        history = []
+
+    if len(history) < 2:
+        st.info("Collect 2+ sessions to see trend")
+        return
+
+    # Extract data
+    sessions = list(range(1, len(history) + 1))
+    mvc_norms = [h.get("mvc_normalised", 100) for h in history]
+    avg_efforts = [h.get("avg_effort_pct", 0) for h in history]
+    good_ratios = [h.get("good_ratio_pct", 0) for h in history]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=sessions, y=mvc_norms,
+        mode="lines+markers",
+        name="MVC% (Strength)",
+        line=dict(color="#1D9E75", width=2),
+        marker=dict(size=6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=sessions, y=avg_efforts,
+        mode="lines+markers",
+        name="Avg Effort%",
+        line=dict(color="#378ADD", width=2),
+        marker=dict(size=6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=sessions, y=good_ratios,
+        mode="lines+markers",
+        name="Good Rep Ratio%",
+        line=dict(color="#a060ff", width=2),
+        marker=dict(size=6),
+    ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(8,13,26,0.8)",
+        height=280,
+        margin=dict(l=0, r=0, t=30, b=0),
+        xaxis=dict(showgrid=False, color="#3a4a7a", title="Session #"),
+        yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a", title="%"),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#6070a0")),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_alerts():
+    """Render alerts panel."""
+    st.markdown("### Doctor Alerts")
+
+    alerts = st.session_state.get("alerts", [])
+
+    if st.button("Clear Alerts"):
+        st.session_state["alerts"] = []
+        st.rerun()
+
+    if not alerts:
+        st.success("No alerts this session")
+        return
+
+    for alert in alerts[:ALERT_MAX_COUNT]:
+        severity = alert.get("severity", "info")
+        msg = alert.get("message", "")
+        alert_type = alert.get("type", "INFO")
+        ts = alert.get("timestamp", time.time())
+        time_str = datetime.fromtimestamp(ts).strftime("%H:%M")
+
+        display = f"[{time_str}] {alert_type} — {msg}"
+
+        if severity == "danger":
+            st.error(display)
+        elif severity == "warning":
+            st.warning(display)
         else:
-            st.info("Start a session to record data.")
+            st.info(display)
 
 
-# ─── TAB 2: Progress ──────────────────────────────────────────────────────────
-with tab2:
-    st.markdown('<div class="section-header">Recovery Progress Over Time</div>', unsafe_allow_html=True)
+# ─── Main Dashboard Layout ─────────────────────────────────────────────────────
 
-    # Generate simulated progress data for demo
-    @st.cache_data
-    def get_demo_progress():
-        np.random.seed(7)
-        n = 20
-        dates = [datetime.now() - timedelta(days=n - i) for i in range(n)]
-        base_score = 35
-        scores = np.clip(
-            [base_score + i * 2.5 + np.random.randn() * 8 for i in range(n)], 10, 100
-        )
-        roms = np.clip(
-            [15 + i * 1.8 + np.random.randn() * 5 for i in range(n)], 5, 80
-        )
-        stabs = np.clip(
-            [0.5 + i * 0.02 + np.random.randn() * 0.05 for i in range(n)], 0, 1
-        )
-        return pd.DataFrame({
-            "date": dates, "score": scores, "rom": roms, "stability": stabs
-        })
+def main():
+    """Main dashboard entry point."""
+    st.set_page_config(
+        page_title="Stroke Rehab Monitor",
+        page_icon="🧠",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
 
-    df_prog = get_demo_progress()
-    # Add live session if active
-    if st.session_state.session_active and st.session_state.session_log:
-        log_df = pd.DataFrame(st.session_state.session_log)
-        if len(log_df) > 0:
-            st.markdown("**Live session rolling average:**")
-            fig_live = go.Figure()
-            fig_live.add_trace(go.Scatter(
-                x=log_df["time"], y=log_df["score"].rolling(5, min_periods=1).mean(),
-                mode="lines", line=dict(color="#00c8aa", width=2),
-                fill="tozeroy", fillcolor="rgba(0,200,170,0.1)",
-                name="Score (rolling avg)",
-            ))
-            fig_live.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(8,13,26,0.8)",
-                height=180, margin=dict(l=0, r=0, t=0, b=0),
-                xaxis=dict(showgrid=False, color="#3a4a7a", title="Session time (s)"),
-                yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a",
-                           range=[0, 105]),
-            )
-            st.plotly_chart(fig_live, use_container_width=True)
+    # Initialize session state
+    _init_session_state()
 
-    pc1, pc2 = st.columns(2)
-    with pc1:
-        fig_score = go.Figure()
-        fig_score.add_trace(go.Scatter(
-            x=df_prog["date"], y=df_prog["score"],
-            mode="lines+markers",
-            line=dict(color="#00c8aa", width=2),
-            marker=dict(size=6, color="#00c8aa"),
-            fill="tozeroy", fillcolor="rgba(0,200,170,0.06)",
-            name="Score",
-        ))
-        # Trend line
-        x_num = np.arange(len(df_prog))
-        z = np.polyfit(x_num, df_prog["score"], 1)
-        trend = np.polyval(z, x_num)
-        fig_score.add_trace(go.Scatter(
-            x=df_prog["date"], y=trend,
-            mode="lines", line=dict(color="#ffa030", width=1, dash="dot"),
-            name="Trend",
-        ))
-        fig_score.update_layout(
-            title=dict(text="Performance Score", font=dict(color="#6070a0", size=13)),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(8,13,26,0.8)",
-            height=260, margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(showgrid=False, color="#3a4a7a"),
-            yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a", range=[0, 105]),
-            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#6070a0")),
-        )
-        st.plotly_chart(fig_score, use_container_width=True)
+    # Start MQTT client exactly once (guard against Streamlit reruns)
+    if not st.session_state.get("mqtt_client_started"):
+        st.session_state["mqtt_client_started"] = True
+        if PAHO_AVAILABLE:
+            client = _start_mqtt_client()
+            st.session_state["mqtt_client"] = client
+        else:
+            st.error("paho-mqtt not installed. Run: pip install paho-mqtt")
 
-    with pc2:
-        fig_rom = go.Figure()
-        fig_rom.add_trace(go.Scatter(
-            x=df_prog["date"], y=df_prog["rom"],
-            mode="lines+markers",
-            line=dict(color="#a060ff", width=2),
-            marker=dict(size=6, color="#a060ff"),
-            fill="tozeroy", fillcolor="rgba(160,96,255,0.06)",
-            name="ROM",
-        ))
-        fig_rom.add_hline(y=45, line_dash="dot", line_color="rgba(255,160,0,0.5)",
-                          annotation_text="target 45°")
-        fig_rom.update_layout(
-            title=dict(text="Range of Motion (°)", font=dict(color="#6070a0", size=13)),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(8,13,26,0.8)",
-            height=260, margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(showgrid=False, color="#3a4a7a"),
-            yaxis=dict(showgrid=True, gridcolor="#141e38", color="#3a4a7a"),
-            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#6070a0")),
-        )
-        st.plotly_chart(fig_rom, use_container_width=True)
+    # Auto-refresh every 500ms (non-blocking)
+    st_autorefresh(interval=DASHBOARD_REFRESH_MS, limit=None, key="dashboard_refresh")
 
-    st.markdown('<div class="section-header">Session History</div>', unsafe_allow_html=True)
-    display_df = df_prog.copy()
-    display_df["date"] = display_df["date"].dt.strftime("%b %d")
-    display_df["score"] = display_df["score"].round(1)
-    display_df["rom"] = display_df["rom"].round(1)
-    display_df["stability"] = display_df["stability"].round(3)
-    st.dataframe(display_df, use_container_width=True, height=250)
+    # Drain MQTT queue (main thread only)
+    _drain_mqtt_queue()
 
+    # ─── TOP BAR ──────────────────────────────────────────────
+    connected = _render_top_bar()
 
-# ─── TAB 3: Games ─────────────────────────────────────────────────────────────
-with tab3:
-    st.markdown('<div class="section-header">Gamified Therapy — Mini Games</div>', unsafe_allow_html=True)
-    st.info("🎮 Games run as standalone Pygame windows. Use the launcher below or run directly from terminal.")
+    # Always show debug info for troubleshooting
+    with st.expander("Debug Info", expanded=not connected):
+        st.write(f"MQTT Broker: {MQTT_BROKER}:{MQTT_PORT}")
+        st.write(f"Patient ID: {PATIENT_ID}")
+        st.write(f"Client ID: {st.session_state.get('mqtt_client_id', 'N/A')}")
+        st.write(f"PAHO Available: {PAHO_AVAILABLE}")
+        st.write(f"PAHO V2 API: {PAHO_V2}")
+        st.write(f"Client Started: {st.session_state.get('mqtt_client_started', False)}")
+        st.write(f"MQTT Connected: {st.session_state.get('mqtt_connected', False)}")
+        st.write(f"Queue size: {_mqtt_queue.qsize()}")
+        st.write(f"EMG msgs: {st.session_state.get('msg_count_emg', 0)}")
+        st.write(f"Fusion msgs: {st.session_state.get('msg_count_fusion', 0)}")
+        st.write(f"Game msgs: {st.session_state.get('msg_count_game', 0)}")
+        st.write(f"Last topic: {st.session_state.get('last_topic', 'None')}")
+        st.write(f"Session active: {st.session_state.get('session_active', False)}")
+        st.write(f"EMG history len: {len(st.session_state.get('emg_history', []))}")
 
-    games = [
-        {"name": "Bubble Pop", "icon": "🫧", "file": "bubble_pop.py",
-         "exercise": "Pinch coordination",
-         "desc": "Pinch floating bubbles before they escape. Easy to understand for any age."},
-        {"name": "Flower Bloom", "icon": "🌸", "file": "flower_bloom.py",
-         "exercise": "Hand open/close",
-         "desc": "Garden blooms when you open your hand. Calm and encouraging for gentle sessions."},
-        {"name": "Pump the Pump", "icon": "💦", "file": "pump_maze.py:PumpThePumpGame",
-         "exercise": "Grip strength",
-         "desc": "Squeeze to charge power meter, release to fire water cannon at targets."},
-        {"name": "Maze Steering", "icon": "🌀", "file": "pump_maze.py:MazeSteeringGame",
-         "exercise": "Wrist rotation",
-         "desc": "Rotate your wrist to guide a marble through increasingly complex paths."},
-    ]
-
-    plan = st.session_state.therapy_plan
-    if plan:
-        st.markdown(f"**Prescribed game sequence for {plan.patient_id}:** "
-                    + " → ".join([f"`{g}`" for g in plan.get_game_sequence()]))
-
-    gcols = st.columns(4)
-    for i, game in enumerate(games):
-        with gcols[i]:
-            st.markdown(f"""
-            <div class="metric-card" style="text-align:center; min-height:200px;">
-                <div style="font-size:2.5rem">{game['icon']}</div>
-                <div style="font-size:1.1rem; font-weight:600; color:#e0e8ff; margin:8px 0 4px;">
-                    {game['name']}
-                </div>
-                <div class="metric-label" style="color:#00c8aa;">{game['exercise']}</div>
-                <div style="font-size:0.82rem; color:#5060a0; margin-top:8px; line-height:1.4;">
-                    {game['desc']}
-                </div>
-            </div>""", unsafe_allow_html=True)
-            if st.button(f"▶ Launch", key=f"game_{i}", use_container_width=True):
-                st.code(f"cd stroke_rehab\npython -m game.{game['file'].split('.')[0]}", language="bash")
+    if not connected:
+        st.warning("Patient device offline — waiting for connection...")
 
     st.markdown("---")
-    st.markdown('<div class="section-header">Run from Terminal</div>', unsafe_allow_html=True)
-    st.code("""
-# Run full demo pipeline (all modules integrated)
-python scripts/run_demo.py
 
-# Run a specific game
-python -m game.bubble_pop
-python -m game.flower_bloom
-python -m game.pump_maze  # includes both Pump and Maze
+    # ─── ROW 1: EMG + HAND POSE ───────────────────────────────
+    col_emg, col_hand = st.columns([3, 2])
 
-# Full integration demo
-python scripts/run_demo.py --game bubble_pop --pattern good --duration 60
-""", language="bash")
+    with col_emg:
+        _render_emg_chart()
 
+    with col_hand:
+        _render_hand_pose()
 
-# ─── TAB 4: Doctor Report ─────────────────────────────────────────────────────
-with tab4:
-    st.markdown('<div class="section-header">Doctor Report & Therapy Plan</div>', unsafe_allow_html=True)
+    st.markdown("---")
 
-    plan = st.session_state.therapy_plan
-    if plan is None:
-        st.warning("No therapy plan loaded. Load a doctor report from the sidebar.")
-        st.markdown("**Sample report format:**")
-        from ml.doctor_report import SAMPLE_REPORT
-        st.json(SAMPLE_REPORT)
-    else:
-        rc1, rc2 = st.columns([2, 3])
-        with rc1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Patient ID</div>
-                <div style="font-size:1.3rem; color:#e0e8ff;">{plan.patient_id}</div>
-                <div class="metric-label" style="margin-top:12px;">Condition</div>
-                <div style="color:#e0e8ff;">{plan.condition}</div>
-                <div class="metric-label" style="margin-top:12px;">Severity</div>
-                <div><span class="{'badge-poor' if plan.severity=='severe' else 'badge-comp' if plan.severity=='moderate' else 'badge-good'}">
-                    {plan.severity.upper()}
-                </span></div>
-                <div class="metric-label" style="margin-top:12px;">Affected Side</div>
-                <div style="color:#e0e8ff;">{plan.affected_side.title()}</div>
-                <div class="metric-label" style="margin-top:12px;">Target ROM</div>
-                <div style="color:#00c8aa; font-family:'JetBrains Mono'; font-size:1.2rem;">{plan.target_rom_degrees}°</div>
-                <div class="metric-label" style="margin-top:12px;">Session Duration</div>
-                <div style="color:#e0e8ff;">{plan.session_duration_minutes} minutes</div>
-            </div>""", unsafe_allow_html=True)
+    # ─── ROW 2: FUSION STATE + GAME PROGRESS ──────────────────
+    col_fusion, col_game = st.columns([2, 3])
 
-            if plan.contraindications:
-                st.warning("⚠️ **Contraindications:** " + ", ".join(plan.contraindications))
-            if plan.doctor_notes:
-                st.info(f"📝 **Doctor notes:** {plan.doctor_notes}")
+    with col_fusion:
+        _render_fusion_state()
 
-        with rc2:
-            st.markdown('<div class="section-header">Prescribed Exercises</div>', unsafe_allow_html=True)
-            for j, ex in enumerate(plan.exercises):
-                icon = {"pump_the_pump": "💦", "flower_bloom": "🌸",
-                        "bubble_pop": "🫧", "maze_steering": "🌀"}.get(ex.game, "🎮")
-                diff_cls = {"easy": "badge-good", "medium": "badge-comp", "hard": "badge-poor"}.get(ex.difficulty, "badge-comp")
-                st.markdown(f"""
-                <div class="metric-card" style="margin:6px 0;">
-                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                        <div>
-                            <span style="font-size:1.3rem">{icon}</span>
-                            <span style="font-size:1rem; font-weight:600; color:#e0e8ff; margin-left:8px;">
-                                {ex.game.replace('_', ' ').title()}
-                            </span>
-                        </div>
-                        <span class="{diff_cls}">{ex.difficulty.upper()}</span>
-                    </div>
-                    <div style="margin-top:8px; font-size:0.85rem; color:#6070a0;">
-                        {ex.sets} sets × {ex.reps} reps &nbsp;|&nbsp; {ex.exercise_type.replace('_',' ')}
-                    </div>
-                    {f'<div style="font-size:0.8rem; color:#5060a0; margin-top:6px;">📌 {ex.notes}</div>' if ex.notes else ''}
-                </div>""", unsafe_allow_html=True)
+    with col_game:
+        _render_game_progress()
+
+    st.markdown("---")
+
+    # ─── ROW 3: RECOVERY TREND + ALERTS ───────────────────────
+    col_trend, col_alerts = st.columns([3, 2])
+
+    with col_trend:
+        _render_recovery_trend()
+
+    with col_alerts:
+        _render_alerts()
 
 
-# ─── Auto-refresh ─────────────────────────────────────────────────────────────
-if auto_refresh:
-    time.sleep(refresh_rate)
-    st.rerun()
+if __name__ == "__main__":
+    main()
+

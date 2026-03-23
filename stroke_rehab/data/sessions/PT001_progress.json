@@ -27,6 +27,429 @@
       "mean_rms": 0.0519,
       "mean_rom": 44.83,
       "mean_stability": 0.8333
+    },
+    {
+      "date": "2026-03-22T01:16:44.333826",
+      "session_id": "PT001_20260322_011614",
+      "mean_score": 17.0,
+      "dominant_performance": "poor",
+      "mean_rms": 0.0126,
+      "mean_rom": 50.94,
+      "mean_stability": 0.8581
+    },
+    {
+      "date": "2026-03-22T13:50:14.145704",
+      "session_id": "PT001_20260322_135014",
+      "mean_score": 0,
+      "dominant_performance": "unknown",
+      "mean_rms": 0,
+      "mean_rom": 0,
+      "mean_stability": 0
+    },
+    {
+      "date": "2026-03-22T13:54:14.892792",
+      "session_id": "PT001_20260322_135359",
+      "mean_score": 27.0,
+      "dominant_performance": "poor",
+      "mean_rms": 0.0119,
+      "mean_rom": 54.14,
+      "mean_stability": 0.9366
+    },
+    {
+      "date": "2026-03-22T14:24:01.212677",
+      "session_id": "PT001_20260322_142351",
+      "mean_score": 17.0,
+      "dominant_performance": "poor",
+      "mean_rms": 0.0123,
+      "mean_rom": 53.52,
+      "mean_stability": 0.9193
+    },
+    {
+      "date": "2026-03-22T14:54:25.434578",
+      "session_id": "PT001_20260322_145410",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0123,
+      "mean_rom": 54.99,
+      "mean_stability": 0.8838
+    },
+    {
+      "date": "2026-03-22T16:05:15.167471",
+      "session_id": "PT001_20260322_160315",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0125,
+      "mean_rom": 53.91,
+      "mean_stability": 0.75
+    },
+    {
+      "date": "2026-03-22T18:30:56.159484",
+      "session_id": "PT001_20260322_182850",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.012,
+      "mean_rom": 50.46,
+      "mean_stability": 0.8988
+    },
+    {
+      "date": "2026-03-22T18:40:52.761333",
+      "session_id": "PT001_20260322_183825",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1458,
+      "mean_rom": 50.96,
+      "mean_stability": 0.8397
+    },
+    {
+      "date": "2026-03-22T18:45:58.297867",
+      "session_id": "PT001_20260322_184155",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1449,
+      "mean_rom": 48.53,
+      "mean_stability": 0.8046
+    },
+    {
+      "date": "2026-03-22T18:48:14.228666",
+      "session_id": "PT001_20260322_184645",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0437,
+      "mean_rom": 52.59,
+      "mean_stability": 0.7775
+    },
+    {
+      "date": "2026-03-22T18:51:40.306671",
+      "session_id": "PT001_20260322_185014",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0127,
+      "mean_rom": 40.31,
+      "mean_stability": 0.9485
+    },
+    {
+      "date": "2026-03-22T18:57:25.879539",
+      "session_id": "PT001_20260322_185156",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0817,
+      "mean_rom": 54.8,
+      "mean_stability": 0.7589
+    },
+    {
+      "date": "2026-03-22T19:32:18.910856",
+      "session_id": "PT001_20260322_193018",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0131,
+      "mean_rom": 37.53,
+      "mean_stability": 0.9337
+    },
+    {
+      "date": "2026-03-22T19:40:09.981312",
+      "session_id": "PT001_20260322_193809",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0128,
+      "mean_rom": 37.72,
+      "mean_stability": 0.9457
+    },
+    {
+      "date": "2026-03-22T19:58:30.655018",
+      "session_id": "PT001_20260322_195630",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0118,
+      "mean_rom": 36.42,
+      "mean_stability": 0.7729
+    },
+    {
+      "date": "2026-03-22T20:04:43.069382",
+      "session_id": "PT001_20260322_200242",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0131,
+      "mean_rom": 43.78,
+      "mean_stability": 0.9439
+    },
+    {
+      "date": "2026-03-22T20:06:48.667549",
+      "session_id": "PT001_20260322_200448",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0123,
+      "mean_rom": 43.88,
+      "mean_stability": 0.94
+    },
+    {
+      "date": "2026-03-22T20:13:36.059303",
+      "session_id": "PT001_20260322_201135",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0123,
+      "mean_rom": 46.02,
+      "mean_stability": 0.7649
+    },
+    {
+      "date": "2026-03-22T20:30:17.781483",
+      "session_id": "PT001_20260322_202817",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0112,
+      "mean_rom": 52.19,
+      "mean_stability": 0.7515
+    },
+    {
+      "date": "2026-03-22T20:32:57.115631",
+      "session_id": "PT001_20260322_203140",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0131,
+      "mean_rom": 36.27,
+      "mean_stability": 0.943
+    },
+    {
+      "date": "2026-03-22T20:33:45.044183",
+      "session_id": "PT001_20260322_203313",
+      "mean_score": 69.0,
+      "dominant_performance": "compensating",
+      "mean_rms": 0.061,
+      "mean_rom": 36.33,
+      "mean_stability": 0.9375
+    },
+    {
+      "date": "2026-03-22T20:38:38.522838",
+      "session_id": "PT001_20260322_203806",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0125,
+      "mean_rom": 53.94,
+      "mean_stability": 0.7502
+    },
+    {
+      "date": "2026-03-22T20:41:33.133638",
+      "session_id": "PT001_20260322_204031",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0124,
+      "mean_rom": 35.14,
+      "mean_stability": 0.7504
+    },
+    {
+      "date": "2026-03-22T20:44:07.696237",
+      "session_id": "PT001_20260322_204306",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0124,
+      "mean_rom": 35.53,
+      "mean_stability": 0.8369
+    },
+    {
+      "date": "2026-03-22T22:37:39.501523",
+      "session_id": "PT001_20260322_204754",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1681,
+      "mean_rom": 37.93,
+      "mean_stability": 0.75
+    },
+    {
+      "date": "2026-03-22T23:10:27.876963",
+      "session_id": "PT001_20260322_231026",
+      "mean_score": 0.0,
+      "dominant_performance": "unknown",
+      "mean_rms": 0.0,
+      "mean_rom": 0.0,
+      "mean_stability": 0.0
+    },
+    {
+      "date": "2026-03-22T23:11:25.428047",
+      "session_id": "PT001_20260322_231123",
+      "mean_score": 0.0,
+      "dominant_performance": "unknown",
+      "mean_rms": 0.0,
+      "mean_rom": 0.0,
+      "mean_stability": 0.0
+    },
+    {
+      "date": "2026-03-22T23:12:55.958762",
+      "session_id": "PT001_20260322_231254",
+      "mean_score": 0.0,
+      "dominant_performance": "unknown",
+      "mean_rms": 0.0,
+      "mean_rom": 0.0,
+      "mean_stability": 0.0
+    },
+    {
+      "date": "2026-03-22T23:15:20.224032",
+      "session_id": "PT001_20260322_231508",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0349,
+      "mean_rom": 49.63,
+      "mean_stability": 0.7506
+    },
+    {
+      "date": "2026-03-22T23:18:21.087858",
+      "session_id": "PT001_20260322_231749",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0129,
+      "mean_rom": 54.42,
+      "mean_stability": 0.823
+    },
+    {
+      "date": "2026-03-22T23:19:52.861483",
+      "session_id": "PT001_20260322_231835",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0111,
+      "mean_rom": 36.89,
+      "mean_stability": 0.8462
+    },
+    {
+      "date": "2026-03-22T23:22:54.492675",
+      "session_id": "PT001_20260322_232052",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0136,
+      "mean_rom": 47.11,
+      "mean_stability": 0.935
+    },
+    {
+      "date": "2026-03-22T23:27:58.970708",
+      "session_id": "PT001_20260322_232557",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1591,
+      "mean_rom": 35.11,
+      "mean_stability": 0.9495
+    },
+    {
+      "date": "2026-03-22T23:32:20.197412",
+      "session_id": "PT001_20260322_233018",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1143,
+      "mean_rom": 47.48,
+      "mean_stability": 0.9094
+    },
+    {
+      "date": "2026-03-22T23:34:35.274840",
+      "session_id": "PT001_20260322_233233",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0946,
+      "mean_rom": 53.4,
+      "mean_stability": 0.9023
+    },
+    {
+      "date": "2026-03-22T23:37:28.853810",
+      "session_id": "PT001_20260322_233527",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0122,
+      "mean_rom": 37.57,
+      "mean_stability": 0.7632
+    },
+    {
+      "date": "2026-03-22T23:39:58.029516",
+      "session_id": "PT001_20260322_233756",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.173,
+      "mean_rom": 38.42,
+      "mean_stability": 0.9285
+    },
+    {
+      "date": "2026-03-22T23:42:55.168288",
+      "session_id": "PT001_20260322_234059",
+      "mean_score": 69.0,
+      "dominant_performance": "compensating",
+      "mean_rms": 0.0752,
+      "mean_rom": 48.63,
+      "mean_stability": 0.9041
+    },
+    {
+      "date": "2026-03-22T23:44:06.392645",
+      "session_id": "PT001_20260322_234316",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1394,
+      "mean_rom": 35.82,
+      "mean_stability": 0.9312
+    },
+    {
+      "date": "2026-03-22T23:45:13.042480",
+      "session_id": "PT001_20260322_234411",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0126,
+      "mean_rom": 41.77,
+      "mean_stability": 0.8349
+    },
+    {
+      "date": "2026-03-22T23:47:45.884635",
+      "session_id": "PT001_20260322_234644",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1647,
+      "mean_rom": 49.94,
+      "mean_stability": 0.9397
+    },
+    {
+      "date": "2026-03-22T23:48:47.211708",
+      "session_id": "PT001_20260322_234818",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.1649,
+      "mean_rom": 50.82,
+      "mean_stability": 0.857
+    },
+    {
+      "date": "2026-03-22T23:49:52.991745",
+      "session_id": "PT001_20260322_234851",
+      "mean_score": 69.0,
+      "dominant_performance": "compensating",
+      "mean_rms": 0.0859,
+      "mean_rom": 47.19,
+      "mean_stability": 0.7695
+    },
+    {
+      "date": "2026-03-22T23:55:31.837051",
+      "session_id": "PT001_20260322_235430",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.0113,
+      "mean_rom": 55.0,
+      "mean_stability": 0.8541
+    },
+    {
+      "date": "2026-03-23T00:01:41.295690",
+      "session_id": "PT001_20260323_000109",
+      "mean_score": 99.0,
+      "dominant_performance": "good",
+      "mean_rms": 0.142,
+      "mean_rom": 42.87,
+      "mean_stability": 0.7659
+    },
+    {
+      "date": "2026-03-23T00:08:28.453413",
+      "session_id": "PT001_20260323_000755",
+      "mean_score": 94.3,
+      "dominant_performance": "good",
+      "mean_rms": 0.065,
+      "mean_rom": 44.79,
+      "mean_stability": 0.8574
+    },
+    {
+      "date": "2026-03-23T01:47:56.156879",
+      "session_id": "PT001_20260323_014704",
+      "mean_score": 94.75,
+      "dominant_performance": "good",
+      "mean_rms": 0.0596,
+      "mean_rom": 44.99,
+      "mean_stability": 0.845
     }
   ]
 }

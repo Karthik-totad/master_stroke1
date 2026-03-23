@@ -1,9 +1,10 @@
 {
-  "trained_at": "2026-03-21T10:28:20.730149",
+  "trained_at": "2026-03-22T14:52:03.342768",
   "n_samples": 3000,
+  "n_real_samples": 0,
   "accuracy": 0.9983333333333333,
-  "cv_accuracy": 0.9966666666666667,
-  "cv_std": 0.001054092553389449,
+  "cv_accuracy": 0.999,
+  "cv_std": 0.0008164965809277449,
   "feature_names": [
     "rms",
     "mav",

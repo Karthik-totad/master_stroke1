@@ -97,7 +97,8 @@ class SessionLogger:
             json.dump(summary, f, indent=2)
 
         print(f"[SessionLogger] Session saved: {self.session_id}")
-        print(f"  Rows: {len(self._rows)}  |  Duration: {summary['duration_seconds']:.1f}s")
+        duration = summary.get('duration_seconds', 0)
+        print(f"  Rows: {len(self._rows)}  |  Duration: {duration:.1f}s")
         return summary
 
     def _compute_summary(self) -> dict:

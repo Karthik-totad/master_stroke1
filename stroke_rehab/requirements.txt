@@ -11,3 +11,6 @@ pyserial>=3.5
 bleak>=0.21         # BLE Bluetooth
 joblib>=1.3
 Pillow>=10.0
+paho-mqtt>=1.6      # MQTT publishing
+matplotlib>=3.7     # Recovery charts
+streamlit-autorefresh>=0.0.1  # Dashboard auto-refresh

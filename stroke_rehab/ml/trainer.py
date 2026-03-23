@@ -55,26 +55,42 @@ def generate_synthetic_dataset(n_samples: int = 3000) -> pd.DataFrame:
     """
     Generate labelled synthetic training data based on domain knowledge.
     Used when no real session data is available.
+
+    # NOTE: These distributions are calibrated to EMGPreprocessor normalised output.
+    # Replace with real labelled session data as soon as 20+ sessions are available.
+    # Real data always outperforms synthetic — retrain when data is available.
     """
     np.random.seed(42)
     rows = []
 
     for label, props in [
-        ("poor", dict(rms=(0.05, 0.02), mav=(0.04, 0.015), zc=(5, 2),
-                      ssc=(4, 2), wl=(0.3, 0.1), var=(0.001, 0.0005),
-                      mean_freq=(80, 20), median_freq=(70, 15),
-                      peak=(0.15, 0.05), cr=(0.1, 0.05),
-                      angle=(60, 15), rom=(10, 5), stab=(0.5, 0.15), vel=(1, 0.5))),
-        ("compensating", dict(rms=(0.2, 0.05), mav=(0.18, 0.04), zc=(15, 5),
-                              ssc=(12, 4), wl=(1.0, 0.3), var=(0.005, 0.002),
-                              mean_freq=(130, 25), median_freq=(110, 20),
-                              peak=(0.5, 0.1), cr=(0.35, 0.1),
-                              angle=(90, 20), rom=(30, 10), stab=(0.7, 0.1), vel=(3, 1))),
-        ("good", dict(rms=(0.45, 0.08), mav=(0.4, 0.07), zc=(30, 8),
-                      ssc=(25, 6), wl=(2.5, 0.5), var=(0.02, 0.005),
-                      mean_freq=(170, 20), median_freq=(150, 18),
-                      peak=(0.85, 0.08), cr=(0.65, 0.1),
-                      angle=(120, 15), rom=(55, 10), stab=(0.9, 0.05), vel=(5, 1.5))),
+        ("poor", dict(
+            rms=(0.03, 0.01),      mav=(0.025, 0.01),
+            zc=(3, 1),             ssc=(2, 1),
+            wl=(0.08, 0.03),       var=(0.0003, 0.0001),
+            mean_freq=(55, 15),    median_freq=(45, 12),
+            peak=(0.08, 0.03),     cr=(0.05, 0.02),
+            angle=(40, 12),        rom=(8, 4),
+            stab=(0.35, 0.12),     vel=(0.5, 0.3)
+        )),
+        ("compensating", dict(
+            rms=(0.10, 0.03),      mav=(0.09, 0.025),
+            zc=(10, 4),            ssc=(8, 3),
+            wl=(0.45, 0.12),       var=(0.0015, 0.0006),
+            mean_freq=(95, 20),    median_freq=(80, 15),
+            peak=(0.25, 0.07),     cr=(0.22, 0.07),
+            angle=(75, 18),        rom=(22, 8),
+            stab=(0.60, 0.12),     vel=(2.0, 0.8)
+        )),
+        ("good", dict(
+            rms=(0.22, 0.05),      mav=(0.19, 0.04),
+            zc=(22, 6),            ssc=(18, 5),
+            wl=(1.2, 0.25),        var=(0.007, 0.002),
+            mean_freq=(135, 18),   median_freq=(115, 14),
+            peak=(0.48, 0.08),     cr=(0.52, 0.09),
+            angle=(105, 14),       rom=(42, 9),
+            stab=(0.82, 0.07),     vel=(4.0, 1.2)
+        )),
     ]:
         n = n_samples // 3
         p = props
@@ -193,6 +209,7 @@ class PerformanceTrainer:
         meta = {
             "trained_at": datetime.now().isoformat(),
             "n_samples": len(combined),
+            "n_real_samples": len(df) if df is not None else 0,
             "accuracy": float(report["accuracy"]),
             "cv_accuracy": float(cv_scores.mean()),
             "cv_std": float(cv_scores.std()),
@@ -204,6 +221,42 @@ class PerformanceTrainer:
 
         print(f"[trainer] Model saved to {self.model_path}")
         return meta
+
+    def log_labelled_sample(self, emg_features: dict, motion: dict,
+                            performance_label: str, session_id: str):
+        """
+        Append one labelled sample to the patient's session CSV.
+        Called during live sessions when a rep completes.
+        performance_label must be one of: poor / compensating / good
+        This accumulates real training data automatically.
+        """
+        if performance_label not in PERFORMANCE_LABELS:
+            return
+
+        row = {**emg_features, **motion, "performance_label": performance_label,
+               "session_id": session_id, "timestamp": time.time()}
+
+        path = os.path.join(SESSION_DIR, f"{session_id}_features.csv")
+        df   = pd.DataFrame([row])
+        header = not os.path.exists(path)
+        df.to_csv(path, mode="a", header=header, index=False)
+
+    def should_retrain(self) -> bool:
+        """
+        Returns True if enough new real data has accumulated to justify retraining.
+        Threshold: 200+ new labelled samples since last training.
+        """
+        if not os.path.exists(self.meta_path):
+            return True
+        with open(self.meta_path) as f:
+            meta = json.load(f)
+        last_trained = meta.get("n_real_samples", 0)
+        current      = sum(
+            len(pd.read_csv(os.path.join(SESSION_DIR, f)))
+            for f in os.listdir(SESSION_DIR)
+            if f.endswith("_features.csv")
+        ) if os.path.exists(SESSION_DIR) else 0
+        return (current - last_trained) >= 200
 
 
 # ─── Predictor ────────────────────────────────────────────────────────────────
@@ -259,8 +312,9 @@ class PerformancePredictor:
         label = self._le.inverse_transform([idx])[0]
         prob_dict = {c: float(p) for c, p in zip(self._le.classes_, probs)}
 
-        score_map = {"poor": 25, "compensating": 65, "good": 90}
-        score = score_map[label] + np.random.randint(-10, 10)
+        score_map = {"poor": 20, "compensating": 55, "good": 85}
+        confidence_bonus = int(float(np.max(probs)) * 15)
+        score = int(np.clip(score_map[label] + confidence_bonus, 0, 100))
 
         return {
             "label": label,
@@ -309,16 +363,31 @@ class ProgressTracker:
                 return json.load(f)
         return {"patient_id": self.patient_id, "sessions": []}
 
+    REQUIRED_KEYS = {
+        "session_id": str,
+        "game": dict,
+        "emg": dict,
+        "motion": dict,
+    }
+
     def record_session(self, summary: dict):
         """Record a completed session summary."""
+        missing = [k for k in self.REQUIRED_KEYS if k not in summary]
+        if missing:
+            print(f"[ProgressTracker] WARNING: missing keys {missing} — using defaults")
+
+        game   = summary.get("game",   {})
+        emg    = summary.get("emg",    {})
+        motion = summary.get("motion", {})
+
         self._data["sessions"].append({
-            "date": datetime.now().isoformat(),
-            "session_id": summary.get("session_id"),
-            "mean_score": summary.get("game", {}).get("mean_score", 0),
-            "dominant_performance": summary.get("game", {}).get("dominant_performance", "unknown"),
-            "mean_rms": summary.get("emg", {}).get("mean_rms", 0),
-            "mean_rom": summary.get("motion", {}).get("mean_rom", 0),
-            "mean_stability": summary.get("motion", {}).get("mean_stability", 0),
+            "date":                   datetime.now().isoformat(),
+            "session_id":             summary.get("session_id", "unknown"),
+            "mean_score":             float(game.get("mean_score",             0)),
+            "dominant_performance":   str(game.get("dominant_performance",    "unknown")),
+            "mean_rms":               float(emg.get("mean_rms",               0)),
+            "mean_rom":               float(motion.get("mean_rom",            0)),
+            "mean_stability":         float(motion.get("mean_stability",      0)),
         })
         with open(self._path, "w") as f:
             json.dump(self._data, f, indent=2)

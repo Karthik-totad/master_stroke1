@@ -6,9 +6,9 @@ import os
 
 # ─── EMG Source ───────────────────────────────────────────────────────────────
 # Options: "simulated" | "serial" | "bluetooth"
-EMG_SOURCE = "simulated"
+EMG_SOURCE = "serial"
 
-EMG_PORT = "/dev/ttyUSB0"       # Serial port (Linux) or "COM3" (Windows)
+EMG_PORT = "COM13"       # Windows serial port (was /dev/ttyUSB0 for Linux)
 EMG_BAUD = 115200
 EMG_BT_ADDRESS = ""             # BLE MAC address if using Bluetooth
 
@@ -54,4 +54,39 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(REPORT_DIR, exist_ok=True)
 
 # ─── Patient ──────────────────────────────────────────────────────────────────
-DEFAULT_PATIENT_ID = "PT001"
+PATIENT_ID = "PT001"
+
+# Backward compatibility alias
+DEFAULT_PATIENT_ID = PATIENT_ID
+
+# ─── MQTT ─────────────────────────────────────────────────────────────────────────
+MQTT_BROKER = "localhost"
+MQTT_PORT   = 1883
+
+# ─── Fusion + Recovery ──────────────────────────────────────────────────────────
+EMG_THRESHOLD_PCT   = 0.35     # 35% of MVC = contraction detected
+CONTRACTION_MIN_MS  = 150      # ms, will be converted to samples using EMG_SAMPLE_RATE
+FATIGUE_FREQ_DROP   = 0.30     # 30% median frequency drop = fatigue alert
+FINGER_MOVE_THRESH  = 0.04     # normalised landmark delta for movement detection
+
+# Derived window sizes — always computed, never hardcoded
+CONTRACTION_MIN_SAMPLES = int(CONTRACTION_MIN_MS / 1000 * EMG_SAMPLE_RATE)
+FFT_WINDOW_SAMPLES      = int(0.256 * EMG_SAMPLE_RATE)
+RMS_WINDOW_SAMPLES      = int(0.020 * EMG_SAMPLE_RATE)
+
+# ─── Dashboard Settings ─────────────────────────────────────────────────────────
+DASHBOARD_REFRESH_MS   = 500    # MQTT poll interval in milliseconds
+EMG_HISTORY_LENGTH     = 300    # samples to show in live EMG chart (~30s at 10Hz)
+ALERT_MAX_COUNT        = 10     # max alerts to keep in dashboard
+REP_LOG_MAX_COUNT      = 50     # max reps to keep in rep quality chart
+
+# Fusion state colors for dashboard
+FUSION_COLORS = {
+    "GOOD":           "#1D9E75",
+    "INTENT_BLOCKED": "#EF9F27",
+    "PASSIVE_MOVE":   "#378ADD",
+    "REST":           "#888780",
+}
+
+# Import FUSION_TO_PERFORMANCE from core.fusion_engine to avoid duplication
+# (defined there as class attribute: FusionEngine.FUSION_TO_PERFORMANCE)
